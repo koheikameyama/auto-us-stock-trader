@@ -94,19 +94,23 @@ GitHub repository の Settings → Secrets で以下を設定:
 
 ## DBスキーマ
 
-スキーマは現状 [auto-stock-trader リポ](../auto-stock-trader/prisma/schema.prisma) の Prisma で管理。
-本リポは psycopg2 で直接書き込み、型は手書き or 動的辞書で扱う。
+**米国専用 PostgreSQL `us` schema を本リポで管理する方針**（Prisma 導入予定）。
 
-主要テーブル:
-- `StockDailyBar (id, tickerCode, date, open, high, low, close, volume, market)`
-  - ユニーク制約: `(tickerCode, date)`
-  - `market="US"` で米国データを識別
-- `EarningsDate (id, tickerCode, date)`
-  - ユニーク制約: `(tickerCode, date)`
+詳細設計: [docs/database-schema.md](docs/database-schema.md)
 
-スキーマ変更時は本リポの該当スクリプトも合わせて更新する（変更頻度は低い）。
+```
+Railway PostgreSQL
+├── public.*   ← JP (auto-stock-trader 所有)
+└── us.*       ← US (本リポ所有、新規構築中)
+      • us.StockDailyBar
+      • us.EarningsDate
+      • us.IndexDailyBar
+      • us.Stock
+      • (将来) us.TradingOrder, us.OptionContract 等
+```
 
-将来、米国専用テーブル（`USTradingOrder` 等）を追加する場合は本リポで Prisma 導入を検討。
+現状: 暫定的に `public.StockDailyBar (market="US")` に投入されているが、
+us schema 構築後にデータ移行 + backfill スクリプトの書き込み先変更を予定。
 
 ## バックテスト戦略の検証結果
 
