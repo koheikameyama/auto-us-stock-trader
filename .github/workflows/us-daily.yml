@@ -40,6 +40,27 @@ jobs:
       - name: Backfill rotation ETFs
         run: python scripts/data/backfill_rotation_etfs.py
 
+      - name: Get DB counts
+        id: counts
+        if: success()
+        run: |
+          STOCK=$(python -c "import os,psycopg2;c=psycopg2.connect(os.environ['DATABASE_URL']).cursor();c.execute('SELECT COUNT(*), MAX(date) FROM auto_us_stock_trader.\"StockDailyBar\"');n,d=c.fetchone();print(f'{n:,} rows (max {d})')")
+          INDEX=$(python -c "import os,psycopg2;c=psycopg2.connect(os.environ['DATABASE_URL']).cursor();c.execute('SELECT COUNT(*), MAX(date) FROM auto_us_stock_trader.\"IndexDailyBar\"');n,d=c.fetchone();print(f'{n:,} rows (max {d})')")
+          echo "stock=$STOCK" >> $GITHUB_OUTPUT
+          echo "index=$INDEX" >> $GITHUB_OUTPUT
+
+      - name: Notify Slack on success
+        if: success()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_TITLE: "✅ US Daily Backfill 成功"
+          SLACK_MESSAGE: |
+            StockDailyBar: ${{ steps.counts.outputs.stock }}
+            IndexDailyBar: ${{ steps.counts.outputs.index }}
+          SLACK_COLOR: good
+          SLACK_FOOTER: "auto-us-stock-trader"
+
       - name: Notify Slack on failure
         if: failure()
         uses: rtCamp/action-slack-notify@v2

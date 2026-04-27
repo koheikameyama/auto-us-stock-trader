@@ -28,6 +28,24 @@ jobs:
       - name: Backfill US earnings dates
         run: python scripts/data/backfill_earnings.py --yes
 
+      - name: Get DB counts
+        id: counts
+        if: success()
+        run: |
+          EARNINGS=$(python -c "import os,psycopg2;c=psycopg2.connect(os.environ['DATABASE_URL']).cursor();c.execute('SELECT COUNT(*), MAX(date) FROM auto_us_stock_trader.\"EarningsDate\"');n,d=c.fetchone();print(f'{n:,} rows (max {d})')")
+          echo "earnings=$EARNINGS" >> $GITHUB_OUTPUT
+
+      - name: Notify Slack on success
+        if: success()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_TITLE: "✅ US Weekly Backfill 成功"
+          SLACK_MESSAGE: |
+            EarningsDate: ${{ steps.counts.outputs.earnings }}
+          SLACK_COLOR: good
+          SLACK_FOOTER: "auto-us-stock-trader"
+
       - name: Notify Slack on failure
         if: failure()
         uses: rtCamp/action-slack-notify@v2
