@@ -3,16 +3,40 @@
   "version": "1.0.0",
   "description": "米国株自動トレードシステム。データ収集・バックテスト・取引執行を統合（フェーズ的に拡張中）。",
   "private": true,
+  "type": "module",
   "scripts": {
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "typecheck": "tsc --noEmit",
+    "backtest:pead": "tsx src/backtest/us/us-pead-run.ts",
+    "backtest:gapup": "tsx src/backtest/us/us-gapup-run.ts",
+    "backtest:momentum": "tsx src/backtest/us/us-momentum-run.ts",
+    "backtest:mean-reversion": "tsx src/backtest/us/us-mean-reversion-run.ts",
+    "backtest:wheel": "tsx src/backtest/us/us-wheel-run.ts",
+    "backtest:credit-spread": "tsx src/backtest/us/us-credit-spread-run.ts",
+    "backtest:vix-contango": "tsx src/backtest/us/us-vix-contango-run.ts",
+    "backtest:dual-momentum": "tsx src/backtest/us/us-dual-momentum-run.ts",
+    "walk-forward:pead": "tsx scripts/walk-forward/walk-forward-us-pead.ts",
+    "walk-forward:gapup": "tsx scripts/walk-forward/walk-forward-us-gapup.ts",
+    "walk-forward:momentum": "tsx scripts/walk-forward/walk-forward-us-momentum.ts",
+    "walk-forward:mean-reversion": "tsx scripts/walk-forward/walk-forward-us-mean-reversion.ts",
+    "walk-forward:wheel": "tsx scripts/walk-forward/walk-forward-us-wheel.ts",
+    "walk-forward:credit-spread": "tsx scripts/walk-forward/walk-forward-us-credit-spread.ts",
+    "walk-forward:vix-contango": "tsx scripts/walk-forward/walk-forward-us-vix-contango.ts",
+    "walk-forward:dual-momentum": "tsx scripts/walk-forward/walk-forward-us-dual-momentum.ts"
   },
   "devDependencies": {
-    "prisma": "^6.19.3"
+    "@types/node": "^25.6.0",
+    "prisma": "^6.19.3",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.3"
+    "@prisma/client": "^6.19.3",
+    "dayjs": "^1.11.20",
+    "p-limit": "^7.3.0",
+    "technicalindicators": "^3.1.0"
   }
 }
