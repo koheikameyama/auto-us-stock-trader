@@ -38,4 +38,4 @@ jobs:
             米国決算日データのバックフィルでエラーが発生しました。
             詳細は GitHub Actions ログを確認してください。
           SLACK_COLOR: danger
-          SLACK_FOOTER: "trading-data-collector"
+          SLACK_FOOTER: "auto-us-stock-trader"
