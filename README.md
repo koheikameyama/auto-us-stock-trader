@@ -1,69 +1,74 @@
-# trading-data-collector
+# auto-us-stock-trader
 
-トレードシステム向け、市場データ収集専用リポジトリ。
+米国株自動トレードシステム。データ収集・バックテスト・取引執行を統合（フェーズ的に拡張中）。
 
-取引ロジックは持たず、yfinance などから OHLCV / 決算日 / 指数 / ETF データを取得して
-共有 PostgreSQL に書き込むだけの責務を担う。
+## ステータス
 
-## アーキテクチャ
+| フェーズ | 状態 | 内容 |
+|---|---|---|
+| **データ層** | ✅ 稼働中 | yfinance から OHLCV / 決算日 / 指数 / ETF を収集、PostgreSQL に保存 |
+| **バックテスト層** | 🚧 [auto-stock-trader リポ](../auto-stock-trader/src/backtest/us/)に暫定配置中 | 8戦略検証済み（Phase 1: GapUp/Momentum/PEAD/MeanRev/Wheel + Phase 2: SPY Credit Spread / VIX Contango / Dual Momentum）。本リポへの移管は本番取引着手時に実施 |
+| **取引層** | 📋 未着手 | IBKR / Webull API クライアント、注文執行、ポジション管理 |
+
+## アーキテクチャ方針
 
 ```
-┌──────────────────────────────────┐
-│ trading-data-collector (本リポ)  │
-│ Python + GitHub Actions          │
-│ ──────────────────               │
-│ • S&P 500/600 OHLCV              │
-│ • 決算日                          │
-│ • 指数（^GSPC, ^VIX）            │
-│ • ETF（SPY, EFA, AGG, SVXY等）   │
-└─────────┬────────────────────────┘
-          │ psycopg2 で書き込み
-          ↓
+┌────────────────────────────────────────────────┐
+│ auto-us-stock-trader (本リポ, US専用)          │
+│ ──────────────────                             │
+│ scripts/data/   データ収集 (Python, GH Actions) │
+│ scripts/lib/    共通ヘルパー                    │
+│ src/            (将来) 取引コード TypeScript    │
+│ docs/           設計ドキュメント                │
+└──────────┬─────────────────────────────────────┘
+           │ psycopg2 で読み書き
+           ↓
 ┌──────────────────────────────────┐
 │ PostgreSQL (Railway)             │
-│  StockDailyBar, EarningsDate     │
-└─────────┬────────────────────────┘
-          │ 各取引システムが読み込み
-          ↓
-┌────────────────────┐  ┌────────────────────┐
-│ auto-stock-trader  │  │ auto-us-options    │
-│ JP取引、立花API     │  │ (将来) US取引       │
-└────────────────────┘  └────────────────────┘
+│  StockDailyBar (market="US")     │
+│  EarningsDate                    │
+│  (将来) USTradingOrder 等         │
+└──────────┬───────────────────────┘
+           │ Prisma で読み込み
+           ↓
+┌──────────────────────────────────┐
+│ auto-stock-trader (JP専用リポ)    │
+│ JP取引、立花API（独立稼働）       │
+└──────────────────────────────────┘
 ```
 
-## なぜ独立リポか
+### 設計判断
 
-- **失敗ドメイン分離**: yfinance障害で取引システムを止めない
-- **スケジュール独立**: 取引はマーケット時間連動、データは夜間バッチで十分
-- **言語最適化**: データ収集はPython、取引はTypeScriptが得意な領域に集中
-- **拡張性**: 米国データ追加が既存JP取引システムに影響しない
+- **JPと完全独立**: 別リポ、別デプロイ、別cron。失敗ドメイン分離
+- **共通DBスキーマは auto-stock-trader 側で管理**: 米国専用テーブル追加時のみ本リポでPrisma導入
+- **データ収集は dedicated cron**: 取引コードと別ライフサイクル、yfinance障害が取引を止めない
+- **Python = データ、TypeScript = 取引**: 各言語の得意領域に集中
 
-## スクリプト一覧
+## データ収集スクリプト
 
 | スクリプト | 内容 | データソース |
 |---|---|---|
-| `scripts/us/backfill_daily_bars.py` | S&P 500/600 OHLCV | yfinance + Wikipedia |
-| `scripts/us/backfill_earnings.py` | 決算日 | yfinance |
-| `scripts/us/backfill_index.py` | ^GSPC, ^VIX | yfinance |
-| `scripts/us/backfill_vol_etfs.py` | VXX/SVXY/UVXY/SVIX/VIXY | yfinance |
-| `scripts/us/backfill_rotation_etfs.py` | SPY/EFA/AGG/QQQ/IWM/TLT/GLD/BND | yfinance |
+| `scripts/data/backfill_daily_bars.py` | S&P 500/600 OHLCV | yfinance + Wikipedia |
+| `scripts/data/backfill_earnings.py` | 決算日 | yfinance |
+| `scripts/data/backfill_index.py` | ^GSPC, ^VIX | yfinance |
+| `scripts/data/backfill_vol_etfs.py` | VXX/SVXY/UVXY/SVIX/VIXY | yfinance |
+| `scripts/data/backfill_rotation_etfs.py` | SPY/EFA/AGG/QQQ/IWM/TLT/GLD/BND | yfinance |
 
 ## ローカル実行
 
 ```bash
-# 仮想環境作成
-python -m venv .venv
+# 仮想環境
+python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 
-# .env を作成
-cp .env.example .env
-# → DATABASE_URL を編集
+# .env 作成
+cp .env.example .env  # → DATABASE_URL を編集
 
 # 実行例
-python scripts/us/backfill_daily_bars.py --index sp500 --yes
-python scripts/us/backfill_index.py --yes
-python scripts/us/backfill_vol_etfs.py
+python scripts/data/backfill_daily_bars.py --index sp500 --yes
+python scripts/data/backfill_index.py --yes
+python scripts/data/backfill_vol_etfs.py
 ```
 
 ### コマンドラインオプション
@@ -77,7 +82,7 @@ python scripts/us/backfill_vol_etfs.py
 
 | ワークフロー | スケジュール | 内容 |
 |---|---|---|
-| `us-daily.yml` | 平日 JST 7:00 | OHLCV / 指数 / ETF |
+| `us-daily.yml` | 平日 JST 7:00（米国close後）| OHLCV / 指数 / ETF |
 | `us-weekly.yml` | 毎週土曜 JST 8:00 | 決算日 |
 
 ### Secrets 設定
@@ -85,29 +90,50 @@ python scripts/us/backfill_vol_etfs.py
 GitHub repository の Settings → Secrets で以下を設定:
 
 - `DATABASE_URL`: PostgreSQL接続URL（書き込み権限あり）
-- `SLACK_WEBHOOK_URL`: Slack通知用Webhook URL
+- `SLACK_WEBHOOK_URL`: Slack通知用Webhook URL（失敗時通知）
 
 ## DBスキーマ
 
-スキーマは取引システム側（`auto-stock-trader` の Prisma）で管理。
-本リポは psycopg2 で直接書き込みするだけ。
+スキーマは現状 [auto-stock-trader リポ](../auto-stock-trader/prisma/schema.prisma) の Prisma で管理。
+本リポは psycopg2 で直接書き込み、型は手書き or 動的辞書で扱う。
 
 主要テーブル:
 - `StockDailyBar (id, tickerCode, date, open, high, low, close, volume, market)`
   - ユニーク制約: `(tickerCode, date)`
-  - `market`: `"US"` で米国データを識別
+  - `market="US"` で米国データを識別
 - `EarningsDate (id, tickerCode, date)`
   - ユニーク制約: `(tickerCode, date)`
 
-スキーマ変更時は本リポの該当スクリプトも合わせて更新する必要あり。
+スキーマ変更時は本リポの該当スクリプトも合わせて更新する（変更頻度は低い）。
+
+将来、米国専用テーブル（`USTradingOrder` 等）を追加する場合は本リポで Prisma 導入を検討。
+
+## バックテスト戦略の検証結果
+
+詳細は [auto-stock-trader/docs/specs/backtest-us-stocks.md](../auto-stock-trader/docs/specs/backtest-us-stocks.md) 参照。
+
+| 戦略 | WF判定 | 結論 |
+|---|---|---|
+| **SPY Credit Spread** | OOS PF 4.86, 勝率96% | **本番候補** |
+| Dual Momentum (GEM) | 5/7正窓、SPY劣後 | 限定的有効 |
+| GapUp / Momentum / PEAD / Mean Reversion / Wheel / VIX Contango | エッジなし | 不採用 |
 
 ## 関連リポジトリ
 
 - [auto-stock-trader](https://github.com/koheikameyama/auto-stock-trader): 日本株取引システム（立花証券）
-- (将来) auto-us-options: 米国オプション取引システム
+  - Prisma スキーマの所有者
+  - 米国バックテストコードを暫定配置中（本番取引着手時に本リポへ移管）
+
+## ロードマップ
+
+1. ✅ 米国データ収集を別リポに分離（2026-04-27）
+2. 📋 SPY Credit Spread のテール耐性検証（2018 Volmageddon, 2020 COVID 期間）
+3. 📋 IBKR or Webull API クライアント実装（paper trading）
+4. 📋 本リポへバックテストコード移管
+5. 📋 本番取引開始（少額 → スケールアップ）
 
 ## 注意事項
 
 - yfinance は無償だがレート制限あり。並列度は1-3に抑える（既存スクリプト準拠）
-- ON CONFLICT DO NOTHING で冪等性を確保しているので、同日に複数回実行してOK
+- `ON CONFLICT DO NOTHING` で冪等性を確保しているので、同日に複数回実行してOK
 - 米国市場のholiday判定は yfinance 任せ（取得結果が空ならスキップ）

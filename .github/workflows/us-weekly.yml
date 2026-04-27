@@ -26,7 +26,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Backfill US earnings dates
-        run: python scripts/us/backfill_earnings.py --yes
+        run: python scripts/data/backfill_earnings.py --yes
 
       - name: Notify Slack on failure
         if: failure()

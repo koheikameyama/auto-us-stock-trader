@@ -26,19 +26,19 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Backfill S&P 500 daily bars
-        run: python scripts/us/backfill_daily_bars.py --index sp500 --yes
+        run: python scripts/data/backfill_daily_bars.py --index sp500 --yes
 
       - name: Backfill S&P 600 daily bars
-        run: python scripts/us/backfill_daily_bars.py --index sp600 --yes
+        run: python scripts/data/backfill_daily_bars.py --index sp600 --yes
 
       - name: Backfill index data (^GSPC, ^VIX)
-        run: python scripts/us/backfill_index.py --yes
+        run: python scripts/data/backfill_index.py --yes
 
       - name: Backfill VIX-related ETFs
-        run: python scripts/us/backfill_vol_etfs.py
+        run: python scripts/data/backfill_vol_etfs.py
 
       - name: Backfill rotation ETFs
-        run: python scripts/us/backfill_rotation_etfs.py
+        run: python scripts/data/backfill_rotation_etfs.py
 
       - name: Notify Slack on failure
         if: failure()
