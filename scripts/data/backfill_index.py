@@ -2,7 +2,7 @@
 米国市場指数データ バックフィル（S&P 500, VIX）
 
 yfinance で ^GSPC（S&P 500）と ^VIX の3年分OHLCVを取得し、
-StockDailyBar に INSERT。^VIX は既存データを補完。
+auto_us_stock_trader.IndexDailyBar に INSERT。^VIX は既存データを補完。
 
 Usage:
   python scripts/backfill-us-index-data.py [--yes]
@@ -91,7 +91,7 @@ def fetch_index_data(ticker: str) -> list[tuple]:
             continue
         if any(math.isnan(x) for x in [o, h, lo, c]):
             continue
-        bars.append((str(uuid.uuid4()), ticker, dt, o, h, lo, c, vol, "INDEX"))
+        bars.append((str(uuid.uuid4()), ticker, dt, o, h, lo, c, vol))
 
     return bars
 
@@ -104,7 +104,7 @@ def insert_bars(conn, bars: list[tuple]) -> int:
         psycopg2.extras.execute_values(
             cur,
             """
-            INSERT INTO "StockDailyBar" (id, "tickerCode", date, open, high, low, close, volume, market)
+            INSERT INTO auto_us_stock_trader."IndexDailyBar" (id, "tickerCode", date, open, high, low, close, volume)
             VALUES %s
             ON CONFLICT ("tickerCode", date) DO NOTHING
             """,
@@ -134,7 +134,7 @@ def main():
 
         with conn.cursor() as cur:
             cur.execute(
-                'SELECT MIN(date), MAX(date), COUNT(*) FROM "StockDailyBar" WHERE "tickerCode" = %s',
+                'SELECT MIN(date), MAX(date), COUNT(*) FROM auto_us_stock_trader."IndexDailyBar" WHERE "tickerCode" = %s',
                 (ticker,),
             )
             min_d, max_d, cnt = cur.fetchone()

@@ -103,7 +103,7 @@ def insert_earnings(conn, all_rows: list[tuple]) -> int:
             psycopg2.extras.execute_values(
                 cur,
                 """
-                INSERT INTO "EarningsDate" (id, "tickerCode", date)
+                INSERT INTO auto_us_stock_trader."EarningsDate" (id, "tickerCode", date)
                 VALUES %s
                 ON CONFLICT ("tickerCode", date) DO NOTHING
                 """,
@@ -130,8 +130,7 @@ def main():
     # 既存の米国決算データ確認
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT COUNT(*) FROM "EarningsDate"
-            WHERE "tickerCode" NOT LIKE '%%.T'
+            SELECT COUNT(*) FROM auto_us_stock_trader."EarningsDate"
         """)
         existing = cur.fetchone()[0]
     print(f"既存の米国決算データ: {existing:,}件", flush=True)
@@ -195,13 +194,11 @@ def main():
     final_conn = psycopg2.connect(DATABASE_URL, connect_timeout=30)
     with final_conn.cursor() as cur:
         cur.execute("""
-            SELECT COUNT(*) FROM "EarningsDate"
-            WHERE "tickerCode" NOT LIKE '%%.T'
+            SELECT COUNT(*) FROM auto_us_stock_trader."EarningsDate"
         """)
         final_count = cur.fetchone()[0]
         cur.execute("""
-            SELECT COUNT(DISTINCT "tickerCode") FROM "EarningsDate"
-            WHERE "tickerCode" NOT LIKE '%%.T'
+            SELECT COUNT(DISTINCT "tickerCode") FROM auto_us_stock_trader."EarningsDate"
         """)
         ticker_count = cur.fetchone()[0]
     final_conn.close()

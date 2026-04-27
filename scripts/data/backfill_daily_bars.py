@@ -117,7 +117,7 @@ def fetch_ohlcv_batch(tickers: list[str]) -> dict:
                     dt = dt.date()
                 o, h, l, c, v = row.get("Open"), row.get("High"), row.get("Low"), row.get("Close"), row.get("Volume")
                 if all(x is not None and x == x for x in [o, h, l, c, v]):
-                    bars.append((str(uuid.uuid4()), t, dt, float(o), float(h), float(l), float(c), int(v), "US"))
+                    bars.append((str(uuid.uuid4()), t, dt, float(o), float(h), float(l), float(c), int(v)))
             results[t] = bars
     else:
         for t in tickers:
@@ -132,7 +132,7 @@ def fetch_ohlcv_batch(tickers: list[str]) -> dict:
                         dt = dt.date()
                     o, h, l, c, v = row.get("Open"), row.get("High"), row.get("Low"), row.get("Close"), row.get("Volume")
                     if all(x is not None and x == x for x in [o, h, l, c, v]):
-                        bars.append((str(uuid.uuid4()), t, dt, float(o), float(h), float(l), float(c), int(v), "US"))
+                        bars.append((str(uuid.uuid4()), t, dt, float(o), float(h), float(l), float(c), int(v)))
                 if bars:
                     results[t] = bars
             except (KeyError, Exception):
@@ -153,7 +153,7 @@ def insert_bars(conn, all_bars: list[tuple]):
             psycopg2.extras.execute_values(
                 cur,
                 """
-                INSERT INTO "StockDailyBar" (id, "tickerCode", date, open, high, low, close, volume, market)
+                INSERT INTO auto_us_stock_trader."StockDailyBar" (id, "tickerCode", date, open, high, low, close, volume)
                 VALUES %s
                 ON CONFLICT ("tickerCode", date) DO NOTHING
                 """,
@@ -205,8 +205,7 @@ def main():
     # 既存の米国株データ確認（.T なし、^ なし）
     with conn.cursor() as cur:
         cur.execute("""
-            SELECT COUNT(*) FROM "StockDailyBar"
-            WHERE "tickerCode" NOT LIKE '%%.T' AND "tickerCode" NOT LIKE '^%%'
+            SELECT COUNT(*) FROM auto_us_stock_trader."StockDailyBar"
         """)
         existing = cur.fetchone()[0]
     print(f"既存の米国株データ: {existing:,}件", flush=True)
@@ -258,8 +257,7 @@ def main():
     with final_conn.cursor() as cur:
         cur.execute("""
             SELECT MIN(date), MAX(date), COUNT(*)
-            FROM "StockDailyBar"
-            WHERE "tickerCode" NOT LIKE '%%.T' AND "tickerCode" NOT LIKE '^%%'
+            FROM auto_us_stock_trader."StockDailyBar"
         """)
         min_date, max_date, count = cur.fetchone()
     final_conn.close()

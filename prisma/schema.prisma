@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["auto_us_stock_trader"]
+}
+
+model StockDailyBar {
+  id         String   @id @default(cuid())
+  tickerCode String
+  date       DateTime @db.Date
+  open       Float
+  high       Float
+  low        Float
+  close      Float
+  volume     BigInt
+  createdAt  DateTime @default(now())
+
+  @@unique([tickerCode, date])
+  @@index([tickerCode, date(sort: Desc)])
+  @@index([date])
+  @@schema("auto_us_stock_trader")
+}
+
+model EarningsDate {
+  id         String   @id @default(cuid())
+  tickerCode String
+  date       DateTime @db.Date
+  createdAt  DateTime @default(now())
+
+  @@unique([tickerCode, date])
+  @@index([date])
+  @@schema("auto_us_stock_trader")
+}
+
+model IndexDailyBar {
+  id         String   @id @default(cuid())
+  tickerCode String
+  date       DateTime @db.Date
+  open       Float
+  high       Float
+  low        Float
+  close      Float
+  volume     BigInt
+  createdAt  DateTime @default(now())
+
+  @@unique([tickerCode, date])
+  @@index([date])
+  @@schema("auto_us_stock_trader")
+}
+
+model Stock {
+  id         String   @id @default(cuid())
+  tickerCode String   @unique
+  name       String
+  sector     String?
+  industry   String?
+  marketCap  BigInt?
+  indexNames String[]
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([tickerCode])
+  @@schema("auto_us_stock_trader")
+}

@@ -1,0 +1,21 @@
+{
+  "name": "auto-us-stock-trader",
+  "version": "1.0.0",
+  "description": "米国株自動トレードシステム。データ収集・バックテスト・取引執行を統合（フェーズ的に拡張中）。",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "prisma": "^6.19.3"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3"
+  }
+}

@@ -32,11 +32,11 @@ for ticker in TICKERS:
 
         rows = [(str(uuid.uuid4()), ticker, d.date(),
                  float(r["Open"]), float(r["High"]), float(r["Low"]), float(r["Close"]),
-                 int(r["Volume"]) if not pd.isna(r["Volume"]) else 0, "US")
+                 int(r["Volume"]) if not pd.isna(r["Volume"]) else 0)
                 for d, r in df.iterrows()]
         psycopg2.extras.execute_values(
             cur,
-            'INSERT INTO "StockDailyBar" (id, "tickerCode", date, open, high, low, close, volume, market) VALUES %s ON CONFLICT ("tickerCode", date) DO NOTHING',
+            'INSERT INTO auto_us_stock_trader."StockDailyBar" (id, "tickerCode", date, open, high, low, close, volume) VALUES %s ON CONFLICT ("tickerCode", date) DO NOTHING',
             rows, page_size=500
         )
         ins = cur.rowcount

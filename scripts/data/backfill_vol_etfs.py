@@ -43,13 +43,12 @@ for ticker in TICKERS:
                 float(row["Low"]),
                 float(row["Close"]),
                 int(row["Volume"]) if not pd.isna(row["Volume"]) else 0,
-                "US",
             ))
 
         psycopg2.extras.execute_values(
             cur,
             """
-            INSERT INTO "StockDailyBar" (id, "tickerCode", date, open, high, low, close, volume, market)
+            INSERT INTO auto_us_stock_trader."StockDailyBar" (id, "tickerCode", date, open, high, low, close, volume)
             VALUES %s
             ON CONFLICT ("tickerCode", date) DO NOTHING
             """,
