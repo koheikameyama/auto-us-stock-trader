@@ -1,0 +1,41 @@
+name: US Weekly Backfill
+
+on:
+  schedule:
+    # 毎週土曜 JST 8:00 = UTC 23:00（金曜）
+    - cron: "0 23 * * 5"
+  workflow_dispatch: {}
+
+jobs:
+  backfill-weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Backfill US earnings dates
+        run: python scripts/us/backfill_earnings.py --yes
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_TITLE: "❌ US Weekly Backfill 失敗"
+          SLACK_MESSAGE: |
+            米国決算日データのバックフィルでエラーが発生しました。
+            詳細は GitHub Actions ログを確認してください。
+          SLACK_COLOR: danger
+          SLACK_FOOTER: "trading-data-collector"
