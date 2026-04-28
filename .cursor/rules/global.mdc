@@ -1,0 +1,37 @@
+---
+description: auto-us-stock-trader リポ全体に常時適用されるルール
+globs:
+alwaysApply: true
+---
+
+# 全体ルール（auto-us-stock-trader）
+
+グローバル `~/.claude/CLAUDE.md` に従いつつ、本リポ固有のルールを以下に定義する。
+
+## 禁止事項（再掲・忘却防止）
+
+- `prisma db push` は使用禁止 → `prisma migrate dev --name <change>` を必ず使う
+- `prisma migrate resolve --applied` は使用禁止 → 過去 2 回事故あり（2026-02-22, 2026-02-27）
+
+## PR 運用
+
+- PR 本文に必ず `Fixes KOH-XX`（Linear タスク ID）を含める
+- コミット / PR 本文に Claude Code 情報（Generated with Claude Code, Co-Authored-By）を**含めない**
+- マージは手動（Claude は PR 作成まで）
+
+## DB 命名
+
+- 米国データは将来 `us` schema に移行予定
+- 現状は暫定的に `public.StockDailyBar (market="US")` に投入
+- 新規 US 専用テーブルを追加する場合は `us` schema を前提に設計する
+
+## タイムゾーン
+
+- コード内の日付・時刻は **UTC** で保存
+- ログ・ユーザー向け表示は **JST**（Asia/Tokyo）に変換
+
+## 言語分業
+
+- **Python**: データ収集（`scripts/data/`）、バックエンドバッチ
+- **TypeScript**: 取引執行、バックテスト（移管後）
+- 取引コードに Python を混ぜない、データ収集に TS を混ぜない
