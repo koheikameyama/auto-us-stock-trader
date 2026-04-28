@@ -1,0 +1,38 @@
+---
+description: Prisma スキーマ・マイグレーション関連のルール
+globs: prisma/**, **/*.prisma
+alwaysApply: false
+---
+
+# Prisma / DB マイグレーションルール
+
+## スキーマ変更時のフロー
+
+1. `prisma/schema.prisma` を編集
+2. `npx prisma migrate dev --name <change>` を実行（マイグレーションファイル生成）
+3. 生成された `prisma/migrations/<timestamp>_<change>/migration.sql` をコミット
+4. 本番デプロイ時は `npx prisma migrate deploy` で適用
+
+## 禁止コマンド
+
+### `prisma db push`
+
+- 開発中のプロトタイプ用。**本番では絶対に使わない**
+- マイグレーション履歴が残らず、チーム・環境間でスキーマ差分が出る
+
+### `prisma migrate resolve --applied`
+
+- **使用禁止**
+- 理由: SQL を実行せず「適用済み」とマークするだけのコマンド
+- 過去 2 回（2026-02-22, 2026-02-27）に同じ事故が発生:
+  `.env` が本番 DB を指している状態で実行 → カラム未作成のまま「適用済み」扱いに
+- シャドウ DB エラーが出ても `migrate dev` で解決すること
+
+## チェックリスト
+
+スキーマ変更 PR 作成前:
+
+- [ ] `prisma migrate dev` でマイグレーションファイルを生成した
+- [ ] `prisma/migrations/` 配下のファイルを Git にコミットした
+- [ ] 本番デプロイ手順は `migrate deploy` を使う前提で書いている
+- [ ] `db push` / `resolve --applied` を使っていない
