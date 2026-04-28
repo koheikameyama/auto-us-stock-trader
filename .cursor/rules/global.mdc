@@ -1,6 +1,5 @@
 ---
 description: auto-us-stock-trader リポ全体に常時適用されるルール
-globs:
 alwaysApply: true
 ---
 
