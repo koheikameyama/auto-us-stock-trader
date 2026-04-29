@@ -32,6 +32,11 @@ export const US_CREDIT_SPREAD_DEFAULTS: Omit<USCreditSpreadBacktestConfig, "star
   // VIX 30 以上は不安定相場、新規エントリー停止
   vixCap: 30,
 
+  // DD hard stop（Step #1）
+  ddStopEnabled: true,
+  ddStopThreshold: 0.15,
+  ddStopReentryPct: 0.95,
+
   verbose: false,
 };
 

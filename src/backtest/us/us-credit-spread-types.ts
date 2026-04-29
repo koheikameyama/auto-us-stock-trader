@@ -50,6 +50,13 @@ export interface USCreditSpreadBacktestConfig {
   /** VIX上限（VIXが閾値超なら新規エントリー停止） */
   vixCap: number;
 
+  /** Equity DD ハードストップを有効化 */
+  ddStopEnabled: boolean;
+  /** DD 閾値（peak からの下落比率、0.15 = 15%）。ddStopEnabled=false 時無視 */
+  ddStopThreshold: number;
+  /** 再開条件: equity が peak の何 % まで戻ったら再開（hysteresis、0.95 = 95%） */
+  ddStopReentryPct: number;
+
   verbose: boolean;
 }
 
