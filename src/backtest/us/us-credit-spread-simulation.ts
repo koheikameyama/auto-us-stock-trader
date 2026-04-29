@@ -90,6 +90,9 @@ export async function runUSCreditSpreadBacktest(
   }
 
   let cash = config.initialBudget;
+  // DD hard stop ステート（Step #1）
+  let runningPeak = config.initialBudget;
+  let ddStopActive = false;
   const openSpreads: SimulatedSpread[] = [];
   const closedSpreads: SimulatedSpread[] = [];
   const equityCurve: DailyEquity[] = [];
@@ -191,8 +194,27 @@ export async function runUSCreditSpreadBacktest(
     openSpreads.length = 0;
     openSpreads.push(...stillOpen);
 
+    // ── 1.5. DD hard stop 判定（新規エントリーの前）──
+    const equityForDD = cash + calcUnrealizedSpreadValue(
+      openSpreads,
+      spotSpy,
+      iv,
+      config.riskFreeRate,
+      config.spreadWidth,
+      today,
+    );
+    if (equityForDD > runningPeak) runningPeak = equityForDD;
+    if (config.ddStopEnabled) {
+      const dd = (runningPeak - equityForDD) / runningPeak;
+      if (!ddStopActive && dd > config.ddStopThreshold) {
+        ddStopActive = true;
+      } else if (ddStopActive && equityForDD / runningPeak >= config.ddStopReentryPct) {
+        ddStopActive = false;
+      }
+    }
+
     // ── 2. 新規エントリー判定 ──
-    if (openSpreads.length < config.maxPositions) {
+    if (openSpreads.length < config.maxPositions && !ddStopActive) {
       // VIX cap
       if (vix > config.vixCap) {
         // skip
