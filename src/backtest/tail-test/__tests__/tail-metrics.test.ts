@@ -19,7 +19,6 @@ function spread(p: Partial<SimulatedSpread> & { netPnl: number }): SimulatedSpre
     closeDate: "2024-01-20",
     closeReason: "profit_target",
     closeSpreadPrice: 0.4,
-    netPnl: p.netPnl,
     totalCommissions: 2.6,
     ...p,
   } as SimulatedSpread;
