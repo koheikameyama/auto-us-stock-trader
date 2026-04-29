@@ -1,13 +1,15 @@
 """
 米国市場指数データ バックフィル（S&P 500, VIX）
 
-yfinance で ^GSPC（S&P 500）と ^VIX の3年分OHLCVを取得し、
-auto_us_stock_trader.IndexDailyBar に INSERT。^VIX は既存データを補完。
+yfinance で ^GSPC（S&P 500）と ^VIX の OHLCV を取得し、
+auto_us_stock_trader.IndexDailyBar に INSERT。
 
 Usage:
-  python scripts/backfill-us-index-data.py [--yes]
+  python scripts/data/backfill_index.py [--yes]                     # 直近3年（デフォルト）
+  python scripts/data/backfill_index.py --start 2007-01-01 [--yes]  # 期間指定
 """
 
+import argparse
 import os
 import sys
 import uuid
@@ -33,7 +35,15 @@ if not DATABASE_URL:
     print("ERROR: DATABASE_URL が見つかりません")
     sys.exit(1)
 
-SKIP_CONFIRM = "--yes" in sys.argv
+parser = argparse.ArgumentParser(description="米国指数データ backfill")
+parser.add_argument("--yes", action="store_true", help="本番DB接続時の確認スキップ")
+parser.add_argument("--start", help="開始日 YYYY-MM-DD（指定時は --end までの範囲、未指定時は直近3年）")
+parser.add_argument("--end", help="終了日 YYYY-MM-DD（--start 指定時のみ有効、デフォルトは今日）")
+args = parser.parse_args()
+
+SKIP_CONFIRM = args.yes
+START_DATE = args.start
+END_DATE = args.end
 
 if "localhost" not in DATABASE_URL and "127.0.0.1" not in DATABASE_URL:
     print(f"本番DB に接続します: {DATABASE_URL[:50]}...")
@@ -56,13 +66,23 @@ PERIOD = "3y"
 def fetch_index_data(ticker: str) -> list[tuple]:
     """yfinance で指数データを取得"""
     try:
-        data = yf.download(
-            ticker,
-            period=PERIOD,
-            interval="1d",
-            auto_adjust=True,
-            progress=False,
-        )
+        if START_DATE:
+            data = yf.download(
+                ticker,
+                start=START_DATE,
+                end=END_DATE,
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+            )
+        else:
+            data = yf.download(
+                ticker,
+                period=PERIOD,
+                interval="1d",
+                auto_adjust=True,
+                progress=False,
+            )
     except Exception as e:
         print(f"  yfinance error ({ticker}): {e}")
         return []

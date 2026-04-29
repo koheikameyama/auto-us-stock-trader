@@ -2,14 +2,15 @@
 米国株 日足データ バックフィル
 
 Wikipedia から構成銘柄リストを取得し、
-yfinance で3年分のOHLCVを取得して StockDailyBar に INSERT。
+yfinance で OHLCV を取得して StockDailyBar に INSERT。
 
 Usage:
-  python scripts/backfill-us-daily-bars.py                # S&P 500（デフォルト）
-  python scripts/backfill-us-daily-bars.py --index sp600  # S&P 600 SmallCap
-  python scripts/backfill-us-daily-bars.py --yes           # 確認スキップ
+  python scripts/data/backfill_daily_bars.py                            # S&P 500、直近3年
+  python scripts/data/backfill_daily_bars.py --index sp600              # S&P 600
+  python scripts/data/backfill_daily_bars.py --start 2007-01-01 --yes   # 期間指定（長期 backfill）
 """
 
+import argparse
 import io
 import os
 import sys
@@ -39,14 +40,19 @@ if not DATABASE_URL:
     print("ERROR: DATABASE_URL が見つかりません")
     sys.exit(1)
 
-SKIP_CONFIRM = "--yes" in sys.argv
+parser = argparse.ArgumentParser(description="米国株 日足データ backfill")
+parser.add_argument("--yes", action="store_true", help="本番DB接続時の確認スキップ")
+parser.add_argument("--index", choices=["sp500", "sp600"], default="sp500", help="対象インデックス")
+parser.add_argument("--start", help="開始日 YYYY-MM-DD（指定時は --end までの範囲、未指定時は直近3年）")
+parser.add_argument("--end", help="終了日 YYYY-MM-DD（--start 指定時のみ有効、デフォルトは今日）")
+parser.add_argument("--limit", type=int, help="先頭 N 銘柄だけ処理（サンプル実行用）")
+args = parser.parse_args()
 
-# --index フラグ: sp500（デフォルト）or sp600
-INDEX_NAME = "sp500"
-for i, arg in enumerate(sys.argv):
-    if arg == "--index" and i + 1 < len(sys.argv):
-        INDEX_NAME = sys.argv[i + 1].lower()
-        break
+SKIP_CONFIRM = args.yes
+INDEX_NAME = args.index
+START_DATE = args.start
+END_DATE = args.end
+LIMIT = args.limit
 
 if "localhost" not in DATABASE_URL and "127.0.0.1" not in DATABASE_URL:
     print(f"本番DB に接続します: {DATABASE_URL[:50]}...")
@@ -93,15 +99,27 @@ def fetch_ohlcv_batch(tickers: list[str]) -> dict:
     ticker_str = " ".join(tickers)
 
     try:
-        data = yf.download(
-            ticker_str,
-            period=PERIOD,
-            interval="1d",
-            group_by="ticker",
-            auto_adjust=True,
-            progress=False,
-            threads=True,
-        )
+        if START_DATE:
+            data = yf.download(
+                ticker_str,
+                start=START_DATE,
+                end=END_DATE,
+                interval="1d",
+                group_by="ticker",
+                auto_adjust=True,
+                progress=False,
+                threads=True,
+            )
+        else:
+            data = yf.download(
+                ticker_str,
+                period=PERIOD,
+                interval="1d",
+                group_by="ticker",
+                auto_adjust=True,
+                progress=False,
+                threads=True,
+            )
     except Exception as e:
         print(f"  yfinance error: {e}")
         return {}
@@ -198,7 +216,11 @@ def main():
     # 銘柄リスト取得
     print(f"{index_label} 構成銘柄リストを Wikipedia から取得中...", flush=True)
     tickers = get_sp600_tickers() if INDEX_NAME == "sp600" else get_sp500_tickers()
-    print(f"対象銘柄: {len(tickers)}件", flush=True)
+    if LIMIT:
+        tickers = tickers[:LIMIT]
+        print(f"対象銘柄: {len(tickers)}件 (--limit {LIMIT} で制限)", flush=True)
+    else:
+        print(f"対象銘柄: {len(tickers)}件", flush=True)
 
     conn = psycopg2.connect(DATABASE_URL, connect_timeout=30)
 
