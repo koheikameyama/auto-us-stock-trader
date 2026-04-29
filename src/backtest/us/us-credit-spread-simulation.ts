@@ -48,6 +48,24 @@ function priceSpread(
   return Math.max(shortPx - longPx, 0);
 }
 
+/** 開いてるスプレッドの unrealized value（collateral - 現在の負債） */
+function calcUnrealizedSpreadValue(
+  openSpreads: SimulatedSpread[],
+  spotSpy: number,
+  iv: number,
+  riskFreeRate: number,
+  spreadWidth: number,
+  today: string,
+): number {
+  let total = 0;
+  for (const sp of openSpreads) {
+    const tte = Math.max(daysBetween(today, sp.expirationDate) / 365, 0);
+    const currentValue = priceSpread(spotSpy, sp.shortStrike, sp.longStrike, tte, riskFreeRate, iv);
+    total += spreadWidth * CONTRACT_SIZE * sp.contracts - currentValue * CONTRACT_SIZE * sp.contracts;
+  }
+  return total;
+}
+
 export async function runUSCreditSpreadBacktest(
   config: USCreditSpreadBacktestConfig,
   gspcData: Map<string, number>,
@@ -241,23 +259,14 @@ export async function runUSCreditSpreadBacktest(
     }
 
     // ── 3. equity curve 計算 ──
-    let unrealizedSpreadValue = 0;
-    for (const sp of openSpreads) {
-      const tte = daysToYears(daysBetween(today, sp.expirationDate));
-      const currentValue = priceSpread(
-        spotSpy,
-        sp.shortStrike,
-        sp.longStrike,
-        tte,
-        config.riskFreeRate,
-        iv,
-      );
-      // ロック中の collateral - 現在の負債 (= 買い戻しコスト)
-      // unrealized = collateral - currentValue × CONTRACT_SIZE × contracts
-      unrealizedSpreadValue +=
-        config.spreadWidth * CONTRACT_SIZE * sp.contracts -
-        currentValue * CONTRACT_SIZE * sp.contracts;
-    }
+    const unrealizedSpreadValue = calcUnrealizedSpreadValue(
+      openSpreads,
+      spotSpy,
+      iv,
+      config.riskFreeRate,
+      config.spreadWidth,
+      today,
+    );
     const totalEquity = cash + unrealizedSpreadValue;
     equityCurve.push({
       date: today,
