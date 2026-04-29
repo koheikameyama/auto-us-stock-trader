@@ -1,0 +1,91 @@
+import type { ThresholdCheck, PassFailVerdict } from "./types";
+
+export interface DefaultThresholds {
+  winRateMin: number;
+  profitFactorMin: number;
+  cagrMin: number;
+  maxDrawdownMax: number;
+  cvar5MinRatio: number;        // -(maxLoss * cvar5MinRatio)
+  worstWindowDDMax: number;
+  worstWindowPnlPctMin: number;
+}
+
+export const DEFAULT_THRESHOLDS: DefaultThresholds = {
+  winRateMin: 0.70,
+  profitFactorMin: 1.30,
+  cagrMin: 0.10,
+  maxDrawdownMax: 0.25,
+  cvar5MinRatio: 0.5,
+  worstWindowDDMax: 0.30,
+  worstWindowPnlPctMin: -0.50,
+};
+
+export interface ThresholdInputs {
+  winRate: number;
+  profitFactor: number;
+  cagr: number;
+  maxDrawdown: number;
+  cvar5: number | null;
+  worstWindowDD: number | null;       // 全 window 中の最大 DD
+  worstWindowPnlPct: number | null;   // 全 window 中の最悪 PnL%
+  maxLossDollar: number;              // 1 spread の最大損失（spread width × 100 × contracts）
+  thresholds: DefaultThresholds;
+}
+
+export function evaluateThresholds(inputs: ThresholdInputs): PassFailVerdict {
+  const t = inputs.thresholds;
+  const checks: ThresholdCheck[] = [
+    check("Win Rate", "平時", inputs.winRate, t.winRateMin, "≥", inputs.winRate >= t.winRateMin),
+    check("Profit Factor", "平時", inputs.profitFactor, t.profitFactorMin, "≥", inputs.profitFactor >= t.profitFactorMin),
+    check("CAGR", "平時", inputs.cagr, t.cagrMin, "≥", inputs.cagr >= t.cagrMin),
+    check("Max DD", "平時", inputs.maxDrawdown, t.maxDrawdownMax, "≤", inputs.maxDrawdown <= t.maxDrawdownMax),
+    check(
+      "CVaR 5%",
+      "テール",
+      inputs.cvar5,
+      -(inputs.maxLossDollar * t.cvar5MinRatio),
+      "≥",
+      inputs.cvar5 == null ? null : inputs.cvar5 >= -(inputs.maxLossDollar * t.cvar5MinRatio),
+    ),
+    check(
+      "テール期間 DD（最悪）",
+      "テール",
+      inputs.worstWindowDD,
+      t.worstWindowDDMax,
+      "≤",
+      inputs.worstWindowDD == null ? null : inputs.worstWindowDD <= t.worstWindowDDMax,
+    ),
+    check(
+      "テール期間 PnL%（最悪）",
+      "テール",
+      inputs.worstWindowPnlPct,
+      t.worstWindowPnlPctMin,
+      "≥",
+      inputs.worstWindowPnlPct == null ? null : inputs.worstWindowPnlPct >= t.worstWindowPnlPctMin,
+    ),
+  ];
+
+  const evaluated = checks.filter((c) => c.pass !== null);
+  const passed = evaluated.filter((c) => c.pass).length;
+  const failed = evaluated.filter((c) => !c.pass).length;
+  const overallPass = failed === 0;
+
+  return {
+    overallPass,
+    checks,
+    summary: overallPass
+      ? `PASS: ${passed}/${evaluated.length} checks (skipped ${checks.length - evaluated.length})`
+      : `FAIL: ${passed}/${evaluated.length} checks (skipped ${checks.length - evaluated.length})`,
+  };
+}
+
+function check(
+  name: string,
+  category: "平時" | "テール",
+  actual: number | null,
+  threshold: number,
+  _op: "≥" | "≤",
+  pass: boolean | null,
+): ThresholdCheck {
+  return { name, category, actual, threshold, pass };
+}
