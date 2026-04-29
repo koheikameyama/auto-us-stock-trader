@@ -10,6 +10,8 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:studio": "prisma studio",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "backtest:pead": "tsx src/backtest/us/us-pead-run.ts",
     "backtest:gapup": "tsx src/backtest/us/us-gapup-run.ts",
     "backtest:momentum": "tsx src/backtest/us/us-momentum-run.ts",
@@ -31,7 +33,8 @@
     "@types/node": "^25.6.0",
     "prisma": "^6.19.3",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
