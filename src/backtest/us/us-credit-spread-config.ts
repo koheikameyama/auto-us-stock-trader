@@ -34,8 +34,8 @@ export const US_CREDIT_SPREAD_DEFAULTS: Omit<USCreditSpreadBacktestConfig, "star
 
   // DD hard stop（Step #1）
   ddStopEnabled: true,
-  ddStopThreshold: 0.15,
-  ddStopReentryPct: 0.95,
+  ddStopThreshold: 0.10,
+  ddStopCooldownDays: 252,
 
   verbose: false,
 };

@@ -90,9 +90,10 @@ export async function runUSCreditSpreadBacktest(
   }
 
   let cash = config.initialBudget;
-  // DD hard stop ステート（Step #1）
+  // DD hard stop ステート（Step #1: cooldown ベース）
   let runningPeak = config.initialBudget;
   let ddStopActive = false;
+  let ddStopActivatedDate: string | null = null;
   const openSpreads: SimulatedSpread[] = [];
   const closedSpreads: SimulatedSpread[] = [];
   const equityCurve: DailyEquity[] = [];
@@ -208,8 +209,14 @@ export async function runUSCreditSpreadBacktest(
       const dd = (runningPeak - equityForDD) / runningPeak;
       if (!ddStopActive && dd > config.ddStopThreshold) {
         ddStopActive = true;
-      } else if (ddStopActive && equityForDD / runningPeak >= config.ddStopReentryPct) {
-        ddStopActive = false;
+        ddStopActivatedDate = today;
+      } else if (ddStopActive && ddStopActivatedDate != null) {
+        const daysSinceStop = daysBetween(ddStopActivatedDate, today);
+        if (daysSinceStop >= config.ddStopCooldownDays) {
+          ddStopActive = false;
+          ddStopActivatedDate = null;
+          runningPeak = equityForDD; // 新基準にリセット
+        }
       }
     }
 
