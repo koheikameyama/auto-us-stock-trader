@@ -23,6 +23,8 @@ async function main() {
 
   const startDate = getArg("start") ?? "2007-01-03";
   const endDate = getArg("end") ?? dayjs().format("YYYY-MM-DD");
+  const stepLabel = getArg("label");
+  const suffix = stepLabel ? `-${stepLabel}` : "";
 
   const config: USCreditSpreadBacktestConfig = {
     ...US_CREDIT_SPREAD_DEFAULTS,
@@ -110,17 +112,17 @@ async function main() {
   const outDir = path.resolve("docs/reports");
   fs.mkdirSync(outDir, { recursive: true });
   const today = dayjs().format("YYYY-MM-DD");
-  const reportPath = path.join(outDir, `credit-spread-tail-${today}.md`);
+  const reportPath = path.join(outDir, `credit-spread-tail-${today}${suffix}.md`);
   fs.writeFileSync(reportPath, generateMarkdownReport(tailResult), "utf-8");
 
   // CSV
   fs.writeFileSync(
-    path.join(outDir, `equity-curve-${today}.csv`),
+    path.join(outDir, `equity-curve-${today}${suffix}.csv`),
     "date,cash,positionsValue,totalEquity,openPositionCount\n" +
       result.equityCurve.map((e) => `${e.date},${e.cash},${e.positionsValue},${e.totalEquity},${e.openPositionCount}`).join("\n"),
   );
   fs.writeFileSync(
-    path.join(outDir, `spreads-${today}.csv`),
+    path.join(outDir, `spreads-${today}${suffix}.csv`),
     "entryDate,closeDate,shortStrike,longStrike,credit,closeReason,netPnl\n" +
       closed.map((s) => `${s.entryDate},${s.closeDate ?? ""},${s.shortStrike},${s.longStrike},${s.creditReceived.toFixed(4)},${s.closeReason ?? ""},${s.netPnl ?? 0}`).join("\n"),
   );
