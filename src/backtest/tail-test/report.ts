@@ -43,7 +43,7 @@ export function generateMarkdownReport(result: TailTestResult): string {
   lines.push("|---|---|---|---|---|");
   v.checks.forEach((c, i) => {
     const status = c.pass === true ? "✅" : c.pass === false ? "❌" : "⏭ skip";
-    lines.push(`| ${i + 1} | ${c.name} | ${c.actual ?? "-"} | ${c.threshold} | ${status} |`);
+    lines.push(`| ${i + 1} | ${c.name} | ${c.actual ?? "-"} | ${c.threshold ?? "—"} | ${status} |`);
   });
   lines.push("");
   lines.push("## DD 上位");
