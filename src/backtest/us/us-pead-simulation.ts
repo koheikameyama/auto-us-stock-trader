@@ -21,6 +21,9 @@ import {
   type USPrecomputedSimData,
 } from "./us-simulation-helpers";
 import { US_PEAD_RISK_PER_TRADE_PCT } from "./us-pead-config";
+import { detectPeadGapSignal } from "../pead/signal-detector";
+import { calculatePeadStopLoss } from "../pead/stop-loss-calculator";
+import { adjustPeadQuantityForRegime } from "../pead/quantity-adjuster";
 import type {
   USPeadBacktestConfig,
   USPeadBacktestResult,
@@ -111,30 +114,31 @@ export function precomputePeadDailySignals(
         minTurnover: config.minTurnover,
       })) continue;
 
-      // ギャップ判定
-      const gapPct = (todayBar.open - prevBar.close) / prevBar.close;
-      if (gapPct < config.gapMinPct) continue;
-
-      // 陽線チェック（好決算 = 上昇方向）
-      if (todayBar.close < todayBar.open) continue;
-
-      // 出来高サージ
-      const volumeSurgeRatio = todayBar.volume / avgVolume25;
-      if (volumeSurgeRatio < config.volSurgeRatio) continue;
+      // gap + volume + 陽線判定（純関数）
+      const gapSignal = detectPeadGapSignal({
+        prevClose: prevBar.close,
+        todayOpen: todayBar.open,
+        todayClose: todayBar.close,
+        todayVolume: todayBar.volume,
+        avgVolume25,
+        gapMinPct: config.gapMinPct,
+        volSurgeRatio: config.volSurgeRatio,
+      });
+      if (gapSignal == null) continue;
 
       const entryPrice = todayBar.close;
       const atr14 = summary.atr14;
 
-      // SLプレビュー
+      // SLプレビュー（atrMultiplier=1, maxLossPct=Infinity 相当の単純チェック）
       const rawSL = entryPrice - atr14;
       if (rawSL >= entryPrice) continue;
 
       daySignals.push({
         ticker,
         entryPrice,
-        gapPct: Math.round(gapPct * 10000) / 10000,
+        gapPct: gapSignal.gapPct,
         atr14,
-        volumeSurgeRatio: Math.round(volumeSurgeRatio * 100) / 100,
+        volumeSurgeRatio: gapSignal.volumeSurgeRatio,
       });
     }
 
@@ -302,11 +306,14 @@ export function runUSPeadBacktest(
         const lastExit = lastExitDayIdx.get(signal.ticker);
         if (lastExit != null && dayIdx - lastExit < config.cooldownDays) continue;
 
-        // SL計算
-        const rawSL = signal.entryPrice - signal.atr14 * config.atrMultiplier;
-        const maxSL = signal.entryPrice * (1 - config.maxLossPct);
-        const stopLossPrice = Math.max(rawSL, maxSL);
-        if (stopLossPrice >= signal.entryPrice) continue;
+        // SL計算（純関数）
+        const stopLossPrice = calculatePeadStopLoss({
+          entryPrice: signal.entryPrice,
+          atr14: signal.atr14,
+          atrMultiplier: config.atrMultiplier,
+          maxLossPct: config.maxLossPct,
+        });
+        if (stopLossPrice == null) continue;
 
         // TP（実質無効、TSに委ねる）
         const takeProfitPrice = signal.entryPrice + signal.atr14 * 5;
@@ -321,10 +328,8 @@ export function runUSPeadBacktest(
         });
         if (quantity <= 0) continue;
 
-        // VIX elevated: サイズ半減
-        const finalQuantity = todayRegime === "elevated"
-          ? Math.max(1, Math.floor(quantity / 2))
-          : quantity;
+        // VIX レジーム調整（純関数）
+        const finalQuantity = adjustPeadQuantityForRegime(quantity, todayRegime);
 
         const tradeValue = signal.entryPrice * finalQuantity;
         const entryCost = config.costModelEnabled ? calculateUSTransactionCosts(tradeValue, false) : 0;
