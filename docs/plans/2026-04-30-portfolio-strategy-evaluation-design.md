@@ -580,3 +580,59 @@ framework 側は触らない。
 - 現行パラメータ（lookbackDays=42, topN=10, rebalanceDays=15）は cross-sectional momentum の効きが弱い米国大型株 universe に対してチューニング不足の疑い — Phase 4 後の意思決定に委ねる
 - Phase 4 で credit-spread + dual-momentum + PEAD + Momentum の 4 戦略相関分析予定
 
+### Phase 4: Portfolio 相関分析 + portfolio 化判断 (2026-05-01 完了)
+
+**実装完了内容:**
+- [framework/portfolio.ts](../../src/backtest/framework/portfolio.ts) — `combineEquityCurves` (重み付け portfolio 合成、TDD 5 tests)
+- [framework/portfolio-metrics.ts](../../src/backtest/framework/portfolio-metrics.ts) — `calculateAnnualizedReturn` / `calculateSharpeRatio` (TDD 5 tests)
+- [framework/correlation.ts](../../src/backtest/framework/correlation.ts) に `calculateCorrelationMatrix` を追加 (N 戦略の対称行列、TDD 2 tests)
+- 各 strategy runner から StrategyResult 生成関数を export: `runCreditSpreadStrategy` / `runDualMomentumStrategy` / `runPeadStrategy` / `runMomentumStrategy`
+- [framework/run-portfolio-analysis.ts](../../src/backtest/framework/run-portfolio-analysis.ts) — 4 戦略並列実行 + 相関 + 50/50 portfolio 評価 + Markdown レポート生成
+- `portfolio-analysis` package.json script 追加
+- レポート: [docs/reports/portfolio-correlation-matrix-2026-05-01.md](../reports/portfolio-correlation-matrix-2026-05-01.md)
+
+**主要結果（2015-01-01〜2026-05-01, 約 11 年, 2845 営業日）:**
+
+単独メトリクス:
+
+| 戦略 | CAGR | Sharpe | Max DD |
+|---|---|---|---|
+| credit-spread | 11.65% | 0.92 | 19.67% |
+| dual-momentum | 7.13% | 0.52 | 33.10% |
+| pead | -2.38% | -1.45 | 24.59% |
+| momentum | -14.77% | -2.10 | 83.72% |
+
+相関行列 (Pearson, 日次リターン):
+
+|  | credit-spread | dual-momentum | pead | momentum |
+|---|---|---|---|---|
+| credit-spread | 1.000 | 0.470 | 0.062 | 0.210 |
+| dual-momentum | 0.470 | 1.000 | 0.059 | 0.185 |
+| pead | 0.062 | 0.059 | 1.000 | 0.034 |
+| momentum | 0.210 | 0.185 | 0.034 | 1.000 |
+
+50/50 Portfolio 評価:
+
+| Portfolio | CAGR | Sharpe | Max DD | vs CS Sharpe | vs CS MaxDD | 判定 |
+|---|---|---|---|---|---|---|
+| credit-spread + dual-momentum (50/50) | 9.68% | 0.85 | 21.42% | -0.07 | +1.75% | reject |
+| credit-spread + pead (50/50) | 6.86% | 0.87 | 17.36% | -0.05 | -2.31% | reject |
+| credit-spread + momentum (50/50) | 5.43% | 0.59 | 19.53% | -0.33 | -0.14% | reject |
+
+判定基準: portfolio Sharpe > credit-spread Sharpe **AND** portfolio MaxDD < credit-spread MaxDD で "candidate"。
+
+**Verdict: ❌ 不採用 (credit-spread 単独運用推奨)**
+
+**観察:**
+- 相関係数は credit-spread vs PEAD で 0.062, vs Momentum で 0.210 と低相関だが、PEAD/Momentum 単独 Sharpe が大幅マイナスなので合成しても portfolio Sharpe が劣化する
+- credit-spread vs dual-momentum は相関 0.470 (中程度) — share index momentum と SPY put credit-spread が同じ "リスクオン" 局面で稼ぐため相関が上振れ
+- credit-spread + PEAD は MaxDD を 2.31% 縮小したが Sharpe は -0.05 劣化 → 採用基準（両改善）を満たさず
+- credit-spread + dual-momentum は Sharpe -0.07 + MaxDD +1.75% で両劣化 → 棄却
+- 単独 FAIL 戦略を 50/50 で混ぜても credit-spread 単独より良い結果にならない（Tier 1 戦略全 FAIL の必然的帰結）
+
+**次のフェーズへの判断:**
+- credit-spread 単独で paper-trading 継続（KOH-454 系列）
+- 本番運用判断 (KOH-459) の input は credit-spread 単独 metrics
+- Tier 2 (Gap-up / Mean-reversion) ライト評価で diversifier 候補を追加検討する余地は残るが、Tier 1 全 FAIL の状況下では Tier 2 単独 viable 期待値も低く、優先度低
+- Phase 5 (Tier 2 ライト評価) は credit-spread 本番運用 90 日観察後の意思決定に委ねる
+
