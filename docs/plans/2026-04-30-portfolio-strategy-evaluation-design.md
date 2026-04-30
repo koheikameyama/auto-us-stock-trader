@@ -422,3 +422,43 @@ Phase 4 の `portfolio-correlation-matrix-YYYY-MM-DD.md` に以下が記録さ�
 - portfolio 採用に踏み切るかの judgment（YES / 保留 / NO）
 
 判定結果は KOH-458（最終評価）の input になる。
+
+---
+
+## 進捗
+
+### Phase 0: Dual Momentum (KOH-455, 2026-04-30 完了)
+
+**実装完了内容:**
+- 純関数抽出 (TDD): [momentum-calculator.ts](../../src/backtest/dual-momentum/momentum-calculator.ts), [asset-selector.ts](../../src/backtest/dual-momentum/asset-selector.ts), [order-calculator.ts](../../src/backtest/dual-momentum/order-calculator.ts)
+- simulation.ts ラッパー化リファクタ ([us-dual-momentum-simulation.ts](../../src/backtest/us/us-dual-momentum-simulation.ts))
+- rotation ETF データ 2007-01-03〜 backfill 完了 (SPY/EFA/AGG, local + Railway, 4861 rows 各)
+- tail-test framework に `null` 閾値 skip サポート追加 ([pass-fail.ts](../../src/backtest/tail-test/pass-fail.ts))
+- dual-momentum thresholds 定義 ([tail-test-thresholds.ts](../../src/backtest/dual-momentum/tail-test-thresholds.ts))
+- 踏み台 adapter + runner ([dual-momentum-adapter.ts](../../src/backtest/tail-test/dual-momentum-adapter.ts), [run-tail-test.ts](../../src/backtest/dual-momentum/run-tail-test.ts))
+- レポート: [docs/reports/dual-momentum-tail-2026-04-30.md](../reports/dual-momentum-tail-2026-04-30.md)
+
+**主要結果（2007-01-03〜2026-04-30, 19 年）:**
+
+| 指標 | 値 | 閾値 | 判定 |
+|---|---|---|---|
+| Win Rate | 64.86% | null | ⏭ skip |
+| Profit Factor | 3.50 | ≥ 1.0 | ✅ PASS |
+| CAGR | 5.62% | ≥ 7% | ❌ FAIL |
+| Max DD | 32.58% | ≤ 30% | ❌ FAIL |
+| CVaR 5% | $-622.88 | null | ⏭ skip |
+| テール期間 DD（最悪） | 32.58% (COVID) | ≤ 35% | ✅ PASS |
+| テール期間 PnL%（最悪） | -22.01% | ≥ -40% | ✅ PASS |
+
+**Verdict: ❌ FAIL 3/5 checks (skipped 2)**
+
+**観察:**
+- GFC 2008 期間は AGG へ退避できており DD 13% に留まる（理論通り defensive 機能）
+- COVID-19 と 2022 Bear で最大 DD（32.58% / 25.84%）が発生 — 月次リバランスのため急落への反応が遅い
+- Profit Factor 3.5 は平時のリターンが高いことを示す
+- credit-spread との相関は Phase 4 で実測予定
+
+**次のフェーズへの判断:**
+- Phase 0 単独閾値で FAIL したが、これは "diversifier として不十分" の意味ではない
+- credit-spread が下落で死ぬ局面に対し dual-momentum がどれだけ補完するかは Phase 4 の相関分析で評価する
+- **Phase 1 (framework 抽象化リファクタ) に進む** — Phase 0 の踏み台コード (`dual-momentum-adapter.ts`, hardcoded report.ts assumptions) を `StrategyResult` interface に整理
