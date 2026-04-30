@@ -8,30 +8,28 @@
  *
  * 原資産: ^GSPC ÷ 10 = SPY 換算（実SPYと数%以内の誤差）
  * IV: VIX / 100 × ivScaleFactor
+ *
+ * 信号ロジックは 3 つの純関数に切り出し済み（Phase A）:
+ *   - evaluateSpread: 既存スプレッドの HOLD/CLOSE/EXPIRE 判定
+ *   - calcDDStopState: DD hard stop の状態遷移
+ *   - generateEntrySignal: 新規エントリー判定 + skip reason
+ *
+ * 本ファイルは 3 関数を呼ぶ薄いラッパーで、cash 更新・spread 配列管理・
+ * equity curve push・メトリクス計算を担当する。
  */
 
-import dayjs from "dayjs";
-import { bsPutPrice, findStrikeForTargetDelta } from "../../core/options-pricing";
+import { bsPutPrice } from "../../core/options-pricing";
+import { calcDDStopState, type DDStopPrevState } from "../credit-spread/dd-stop";
+import { evaluateSpread } from "../credit-spread/spread-evaluator";
+import { generateEntrySignal } from "../credit-spread/signal-generator";
 import { calculateMetrics } from "../metrics";
 import type { USCreditSpreadBacktestConfig, USCreditSpreadBacktestResult, SimulatedSpread, CreditSpreadPerformanceMetrics } from "./us-credit-spread-types";
 import type { SimulatedPosition, DailyEquity } from "../types";
 
 const CONTRACT_SIZE = 100;
 
-function daysToYears(days: number): number {
-  return Math.max(days / 365, 0);
-}
-
 function daysBetween(a: string, b: string): number {
   return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 86400000);
-}
-
-function findExpirationDate(entryDate: string, dte: number, tradingDays: string[]): string {
-  const target = dayjs(entryDate).add(dte, "day").format("YYYY-MM-DD");
-  for (const d of tradingDays) {
-    if (d >= target) return d;
-  }
-  return tradingDays[tradingDays.length - 1];
 }
 
 /** スプレッドの現在価格（売値ベース、close時に支払う） */
@@ -90,10 +88,12 @@ export async function runUSCreditSpreadBacktest(
   }
 
   let cash = config.initialBudget;
-  // DD hard stop ステート（Step #1: cooldown ベース）
-  let runningPeak = config.initialBudget;
-  let ddStopActive = false;
-  let ddStopActivatedDate: string | null = null;
+  // DD hard stop ステート（純関数 calcDDStopState に渡す）
+  let ddState: DDStopPrevState = {
+    runningPeak: config.initialBudget,
+    ddStopActive: false,
+    ddStopActivatedDate: null,
+  };
   const openSpreads: SimulatedSpread[] = [];
   const closedSpreads: SimulatedSpread[] = [];
   const equityCurve: DailyEquity[] = [];
@@ -106,32 +106,20 @@ export async function runUSCreditSpreadBacktest(
     const spotSpy = gspc / 10;
     const iv = (vix / 100) * config.ivScaleFactor;
 
-    // ── 1. 既存スプレッドを評価・クローズ判定 ──
+    // ── 1. 既存スプレッドを evaluateSpread で評価・クローズ ──
     const stillOpen: SimulatedSpread[] = [];
     for (const sp of openSpreads) {
-      const tte = daysToYears(daysBetween(today, sp.expirationDate));
+      const result = evaluateSpread(sp, { today, spotSpy, vix, config });
 
-      // 満期当日: 内在価値で settlement
-      if (today >= sp.expirationDate) {
-        // 満期: max(shortStrike - spot, 0) - max(longStrike - spot, 0) per share
-        const shortIntrinsic = Math.max(sp.shortStrike - spotSpy, 0);
-        const longIntrinsic = Math.max(sp.longStrike - spotSpy, 0);
-        const finalSpreadValue = Math.max(shortIntrinsic - longIntrinsic, 0);
-
-        // P&L: 受領クレジット - 支払い終値スプレッド (per share)
-        const pnlPerShare = sp.creditReceived - finalSpreadValue;
-        const exitCommission = config.optionsCommission * 2 * sp.contracts; // short close + long close
+      if (result.action === "EXPIRE") {
+        // 満期処理
+        const finalSpreadValue = result.finalValue;
+        const exitCommission = config.optionsCommission * 2 * sp.contracts;
         // 満期消滅の場合は手数料発生せず（OCCの自動消滅）
-        const isWorthless = finalSpreadValue < 0.01;
+        const isWorthless = result.reason === "expired_worthless";
         const commissionsThisLeg = isWorthless ? 0 : exitCommission;
-        const pnl = pnlPerShare * CONTRACT_SIZE * sp.contracts - commissionsThisLeg;
+        const pnl = (sp.creditReceived - finalSpreadValue) * CONTRACT_SIZE * sp.contracts - commissionsThisLeg;
 
-        cash += sp.creditReceived * CONTRACT_SIZE * sp.contracts; // クレジットは entry 時に既に増えてるので戻す...
-        // → 違う。entry時に creditReceived * 100 * contracts を cash に加算済み、collateral も差し引き済み。
-        //    満期では (max loss = spreadWidth × 100 × contracts) のロックを解放、
-        //    支払い分 = finalSpreadValue × 100 × contracts を cash から引く
-
-        // 修正: entry時にロックした collateral を解放
         cash += config.spreadWidth * CONTRACT_SIZE * sp.contracts; // collateral 解放
         cash -= finalSpreadValue * CONTRACT_SIZE * sp.contracts; // 終値支払い
         cash -= commissionsThisLeg;
@@ -141,40 +129,13 @@ export async function runUSCreditSpreadBacktest(
         sp.closeSpreadPrice = finalSpreadValue;
         sp.totalCommissions += commissionsThisLeg;
         sp.netPnl = pnl;
-
-        if (finalSpreadValue < 0.01) sp.closeReason = "expired_worthless";
-        else if (finalSpreadValue >= config.spreadWidth - 0.01) sp.closeReason = "expired_max_loss";
-        else sp.closeReason = "expired_partial";
-
+        sp.closeReason = result.reason;
         closedSpreads.push(sp);
-        continue;
-      }
-
-      // 通常日: 現在のスプレッド価格を計算
-      const currentSpreadPrice = priceSpread(
-        spotSpy,
-        sp.shortStrike,
-        sp.longStrike,
-        tte,
-        config.riskFreeRate,
-        iv,
-      );
-
-      // 利益目標: 現在価値が credit × (1 - profitTarget) 以下になれば 利益確定
-      const profitTargetPrice = sp.creditReceived * (1 - config.profitTarget);
-      // ストップロス: 現在価値が credit × (1 + stopLossMultiplier) 以上で撤退
-      const stopLossPrice = config.stopLossMultiplier > 0
-        ? sp.creditReceived * (1 + config.stopLossMultiplier)
-        : Number.POSITIVE_INFINITY;
-
-      let shouldClose: "profit_target" | "stop_loss" | null = null;
-      if (currentSpreadPrice <= profitTargetPrice) shouldClose = "profit_target";
-      else if (currentSpreadPrice >= stopLossPrice) shouldClose = "stop_loss";
-
-      if (shouldClose) {
+      } else if (result.action === "CLOSE") {
+        // 利確 / SL クローズ
+        const currentSpreadPrice = result.currentValue;
         const exitCommission = config.optionsCommission * 2 * sp.contracts;
-        const pnlPerShare = sp.creditReceived - currentSpreadPrice;
-        const pnl = pnlPerShare * CONTRACT_SIZE * sp.contracts - exitCommission;
+        const pnl = (sp.creditReceived - currentSpreadPrice) * CONTRACT_SIZE * sp.contracts - exitCommission;
 
         cash += config.spreadWidth * CONTRACT_SIZE * sp.contracts; // collateral 解放
         cash -= currentSpreadPrice * CONTRACT_SIZE * sp.contracts; // 買い戻し
@@ -182,20 +143,20 @@ export async function runUSCreditSpreadBacktest(
 
         sp.state = "CLOSED";
         sp.closeDate = today;
-        sp.closeReason = shouldClose;
+        sp.closeReason = result.reason;
         sp.closeSpreadPrice = currentSpreadPrice;
         sp.totalCommissions += exitCommission;
         sp.netPnl = pnl;
-
         closedSpreads.push(sp);
       } else {
+        // HOLD
         stillOpen.push(sp);
       }
     }
     openSpreads.length = 0;
     openSpreads.push(...stillOpen);
 
-    // ── 1.5. DD hard stop 判定（新規エントリーの前）──
+    // ── 1.5. DD hard stop 状態遷移（calcDDStopState 純関数に委譲）──
     const equityForDD = cash + calcUnrealizedSpreadValue(
       openSpreads,
       spotSpy,
@@ -204,87 +165,54 @@ export async function runUSCreditSpreadBacktest(
       config.spreadWidth,
       today,
     );
-    if (equityForDD > runningPeak) runningPeak = equityForDD;
-    if (config.ddStopEnabled) {
-      const dd = (runningPeak - equityForDD) / runningPeak;
-      if (!ddStopActive && dd > config.ddStopThreshold) {
-        ddStopActive = true;
-        ddStopActivatedDate = today;
-      } else if (ddStopActive && ddStopActivatedDate != null) {
-        const daysSinceStop = daysBetween(ddStopActivatedDate, today);
-        if (daysSinceStop >= config.ddStopCooldownDays) {
-          ddStopActive = false;
-          ddStopActivatedDate = null;
-          runningPeak = equityForDD; // 新基準にリセット
-        }
-      }
-    }
+    const newDDState = calcDDStopState({
+      today,
+      totalEquity: equityForDD,
+      prevState: ddState,
+      config,
+    });
+    ddState = {
+      runningPeak: newDDState.runningPeak,
+      ddStopActive: newDDState.ddStopActive,
+      ddStopActivatedDate: newDDState.ddStopActivatedDate,
+    };
 
-    // ── 2. 新規エントリー判定 ──
-    if (openSpreads.length < config.maxPositions && !ddStopActive) {
-      // VIX cap
-      if (vix > config.vixCap) {
-        // skip
-      } else if (config.indexTrendFilter) {
-        const sma = gspcSmaCache.get(today);
-        if (sma == null || gspc < sma) {
-          // skip
-        } else {
-          tryOpenSpread();
-        }
-      } else {
-        tryOpenSpread();
-      }
+    // ── 2. 新規エントリー判定（generateEntrySignal 純関数に委譲）──
+    const signal = generateEntrySignal({
+      today,
+      gspc,
+      spotSpy,
+      vix,
+      smaGspc: gspcSmaCache.get(today) ?? null,
+      cash,
+      openPositionCount: openSpreads.length,
+      ddStopActive: ddState.ddStopActive,
+      tradingDays,
+      config,
+    });
 
-      function tryOpenSpread() {
-        const dte = config.dte;
-        const expirationDate = findExpirationDate(today, dte, tradingDays);
-        const tte = daysToYears(daysBetween(today, expirationDate));
-        if (tte <= 0) return;
+    if (signal.reason === "ENTERED") {
+      const collateralRequired = config.spreadWidth * CONTRACT_SIZE * config.contractsPerSpread;
+      const entryCommission = config.optionsCommission * 2 * config.contractsPerSpread;
+      cash -= collateralRequired;
+      cash += signal.estimatedCredit * CONTRACT_SIZE * config.contractsPerSpread;
+      cash -= entryCommission;
 
-        // ショート put strike を delta で決定
-        const shortInfo = findStrikeForTargetDelta({
-          spotPrice: spotSpy,
-          targetDelta: -Math.abs(config.shortPutDelta),
-          tte,
-          riskFreeRate: config.riskFreeRate,
-          iv,
-          optionType: "put",
-          strikeStep: 1,
-        });
-        const shortStrike = shortInfo.strike;
-        const longStrike = shortStrike - config.spreadWidth;
-        if (longStrike <= 0) return;
-
-        const shortPremium = shortInfo.premium;
-        const longPremium = bsPutPrice(spotSpy, longStrike, tte, config.riskFreeRate, iv);
-        const credit = shortPremium - longPremium;
-        if (credit <= 0.05) return; // クレジット少なすぎはスキップ
-
-        const collateralRequired = config.spreadWidth * CONTRACT_SIZE * config.contractsPerSpread;
-        if (cash < collateralRequired + 50) return; // 余裕を確保
-
-        const entryCommission = config.optionsCommission * 2 * config.contractsPerSpread;
-        cash -= collateralRequired;
-        cash += credit * CONTRACT_SIZE * config.contractsPerSpread;
-        cash -= entryCommission;
-
-        const spread: SimulatedSpread = {
-          underlyingSymbol: config.underlyingSymbol,
-          entryDate: today,
-          expirationDate,
-          entrySpotPrice: spotSpy,
-          entryIV: iv,
-          shortStrike,
-          longStrike,
-          shortDeltaAtEntry: shortInfo.delta,
-          creditReceived: credit,
-          contracts: config.contractsPerSpread,
-          state: "OPEN",
-          totalCommissions: entryCommission,
-        };
-        openSpreads.push(spread);
-      }
+      const newSpread: SimulatedSpread = {
+        underlyingSymbol: config.underlyingSymbol,
+        entryDate: today,
+        expirationDate: signal.expirationDate,
+        entrySpotPrice: spotSpy,
+        entryIV: iv,
+        shortStrike: signal.shortStrike,
+        longStrike: signal.longStrike,
+        shortDeltaAtEntry: signal.shortDelta,
+        creditReceived: signal.estimatedCredit,
+        contracts: config.contractsPerSpread,
+        state: "OPEN",
+        totalCommissions: entryCommission,
+      };
+      openSpreads.push(newSpread);
     }
 
     // ── 3. equity curve 計算 ──
