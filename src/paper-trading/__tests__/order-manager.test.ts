@@ -138,6 +138,44 @@ describe("order-manager", () => {
         }),
       ).rejects.toThrow(/already closed/i);
     });
+
+    it("throws if EXIT order already submitted today", async () => {
+      const position = await prisma.position.create({
+        data: {
+          symbol: "SPY",
+          shortStrike: 480,
+          longStrike: 475,
+          expiry: new Date("2026-06-19"),
+          contracts: 1,
+          creditReceived: 0.85,
+          entryDate: new Date("2026-05-01"),
+          state: "OPEN",
+          totalCommission: 1.20,
+        },
+      });
+      await prisma.tradingOrder.create({
+        data: {
+          ibkrOrderId: 100,
+          symbol: "SPY",
+          orderType: "EXIT",
+          shortStrike: 480,
+          longStrike: 475,
+          expiry: new Date("2026-06-19"),
+          quantity: 1,
+          limitPrice: 0.30,
+          status: "SUBMITTED",
+          submittedAt: new Date(),
+          positionId: position.id,
+        },
+      });
+      await expect(
+        closeSpreadOrder({} as any, prisma, {
+          positionId: position.id,
+          reason: "profit_target",
+          currentSpreadValue: 0.30,
+        }),
+      ).rejects.toThrow(/already submitted/i);
+    });
   });
 
   describe("expirePosition", () => {

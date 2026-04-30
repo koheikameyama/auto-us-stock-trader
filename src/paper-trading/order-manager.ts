@@ -160,6 +160,18 @@ export async function closeSpreadOrder(
     throw new Error(`Position ${input.positionId} is already closed (state=${position.state})`);
   }
 
+  const todayStart = dayjs().startOf("day").toDate();
+  const existingExit = await prisma.tradingOrder.findFirst({
+    where: {
+      positionId: position.id,
+      orderType: "EXIT",
+      submittedAt: { gte: todayStart },
+    },
+  });
+  if (existingExit) {
+    throw new Error(`EXIT order already submitted today for position ${position.id} (orderId=${existingExit.ibkrOrderId})`);
+  }
+
   const expiryYYYYMMDD = position.expiry.toISOString().slice(0, 10).replace(/-/g, "");
   const shortConId = await ibkr.qualifyOptionContract(position.symbol, expiryYYYYMMDD, position.shortStrike, "P");
   const longConId = await ibkr.qualifyOptionContract(position.symbol, expiryYYYYMMDD, position.longStrike, "P");
