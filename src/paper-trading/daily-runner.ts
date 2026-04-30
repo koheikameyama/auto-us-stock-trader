@@ -14,8 +14,11 @@ import { isKillSwitchActive, getKillSwitchInfo } from "./kill-switch";
 import { reconcilePositions } from "./position-syncer";
 import { evaluateSpread } from "../backtest/credit-spread/spread-evaluator";
 import { calcDDStopState } from "../backtest/credit-spread/dd-stop";
+import { generateEntrySignal } from "../backtest/credit-spread/signal-generator";
 import { US_CREDIT_SPREAD_DEFAULTS } from "../backtest/us/us-credit-spread-config";
 import type { SimulatedSpread } from "../backtest/us/us-credit-spread-types";
+import { fetchIndexFromDB } from "../backtest/data-fetcher";
+import { placeNewSpreadOrder } from "./order-manager";
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
@@ -144,7 +147,92 @@ async function main() {
   });
   console.log(`DD stop: active=${ddState.ddStopActive} (transition=${ddState.transition}), peak=$${ddState.runningPeak.toLocaleString()}`);
 
-  // TODO: ステップ 7-9 を次タスクで追加
+  // ── 7. 新規エントリー判定 ──
+  // SMA50 計算: DB の ^GSPC 過去 50 日 close から
+  const lookbackEnd = today;
+  const lookbackStart = dayjs(today).subtract(75, "day").format("YYYY-MM-DD");
+  const gspcHistorical = await fetchIndexFromDB("^GSPC", lookbackStart, lookbackEnd, 0);
+  const sortedDates = [...gspcHistorical.keys()].sort().slice(-50);
+  const sma50 = sortedDates.length === 50
+    ? sortedDates.reduce((sum, d) => sum + (gspcHistorical.get(d) ?? 0), 0) / 50
+    : null;
+  console.log(`SMA50(GSPC) = ${sma50?.toFixed(2) ?? "(unavailable)"}`);
+
+  // tradingDays: 簡易にカレンダー日（weekday）を生成
+  const tradingDays: string[] = [];
+  for (let i = 0; i < 100; i++) {
+    const d = dayjs(today).add(i, "day");
+    const dow = d.day();
+    if (dow !== 0 && dow !== 6) tradingDays.push(d.format("YYYY-MM-DD"));
+  }
+
+  // 信号生成
+  const signal = generateEntrySignal({
+    today,
+    gspc,
+    spotSpy,
+    vix,
+    smaGspc: sma50,
+    cash: netLiq,
+    openPositionCount: dbOpenSpreads.length,
+    ddStopActive: ddState.ddStopActive,
+    tradingDays,
+    config: { ...US_CREDIT_SPREAD_DEFAULTS, startDate: today, endDate: today },
+  });
+
+  console.log(`Entry signal: ${signal.reason}`);
+  await prisma.signalLog.create({
+    data: {
+      date: new Date(today),
+      signalType: "ENTRY",
+      reason: signal.reason,
+      details: {
+        spy: spotSpy,
+        vix,
+        sma50,
+        gspc,
+        ddStopActive: ddState.ddStopActive,
+        ...(signal.reason === "ENTERED" ? {
+          shortStrike: signal.shortStrike,
+          longStrike: signal.longStrike,
+          expirationDate: signal.expirationDate,
+          estimatedCredit: signal.estimatedCredit,
+        } : {}),
+      },
+    },
+  });
+
+  if (signal.reason === "ENTERED") {
+    console.log(`Placing order: SPY ${signal.expirationDate} P ${signal.shortStrike}/${signal.longStrike}, credit ~$${signal.estimatedCredit.toFixed(2)}`);
+    const expiryYYYYMMDD = signal.expirationDate.replace(/-/g, "");
+    try {
+      const placed = await placeNewSpreadOrder(
+        ibkr,
+        prisma,
+        {
+          underlying: "SPY",
+          shortStrike: signal.shortStrike,
+          longStrike: signal.longStrike,
+          expiry: expiryYYYYMMDD,
+          contracts: US_CREDIT_SPREAD_DEFAULTS.contractsPerSpread,
+          estimatedCredit: signal.estimatedCredit,
+        },
+        { dryRun: DRY_RUN },
+      );
+      console.log(`  Order: ibkrOrderId=${placed.ibkrOrderId}, status=${placed.status}, filledCredit=${placed.filledCredit ?? "-"}`);
+    } catch (e: any) {
+      console.error(`  ❌ Order failed: ${e.message}`);
+      await prisma.errorLog.create({
+        data: {
+          category: "ORDER_FAILED",
+          message: e.message,
+          context: { signal: { reason: signal.reason } },
+        },
+      });
+    }
+  }
+
+  // TODO: ステップ 8 (DailyEquitySnapshot) を次タスクで追加
 
   await ibkr.disconnect();
   await prisma.$disconnect();
