@@ -142,3 +142,85 @@ export async function placeNewSpreadOrder(
     positionId,
   };
 }
+
+export interface CloseSpreadInput {
+  positionId: string;
+  reason: "profit_target" | "stop_loss";
+  currentSpreadValue: number; // positive = debit to close
+}
+
+export async function closeSpreadOrder(
+  ibkr: IBKRClient,
+  prisma: PrismaClient,
+  input: CloseSpreadInput,
+): Promise<PlacedSpread> {
+  const position = await prisma.position.findUnique({ where: { id: input.positionId } });
+  if (!position) throw new Error(`Position not found: ${input.positionId}`);
+  if (position.state !== "OPEN") {
+    throw new Error(`Position ${input.positionId} is already closed (state=${position.state})`);
+  }
+
+  const expiryYYYYMMDD = position.expiry.toISOString().slice(0, 10).replace(/-/g, "");
+  const shortConId = await ibkr.qualifyOptionContract(position.symbol, expiryYYYYMMDD, position.shortStrike, "P");
+  const longConId = await ibkr.qualifyOptionContract(position.symbol, expiryYYYYMMDD, position.longStrike, "P");
+
+  const result = await ibkr.placeComboOrder({
+    underlying: position.symbol,
+    legs: [
+      { conId: shortConId, action: "BUY",  ratio: 1 },
+      { conId: longConId,  action: "SELL", ratio: 1 },
+    ],
+    totalQuantity: position.contracts,
+    limitPrice: input.currentSpreadValue,
+    tif: "DAY",
+  });
+
+  await prisma.tradingOrder.create({
+    data: {
+      ibkrOrderId: result.ibkrOrderId,
+      symbol: position.symbol,
+      orderType: "EXIT",
+      shortStrike: position.shortStrike,
+      longStrike: position.longStrike,
+      expiry: position.expiry,
+      quantity: position.contracts,
+      limitPrice: input.currentSpreadValue,
+      status: result.status,
+      submittedAt: new Date(),
+      filledAt: result.status === "FILLED" ? new Date() : null,
+      filledPrice: result.filledPrice,
+      commission: result.commission,
+      positionId: position.id,
+    },
+  });
+
+  if (result.status === "FILLED" && result.filledPrice != null) {
+    const exitCommission = result.commission ?? 0;
+    const totalCommission = (position.totalCommission ?? 0) + exitCommission;
+    const netPnl = (position.creditReceived - result.filledPrice) * 100 * position.contracts - totalCommission;
+    await prisma.position.update({
+      where: { id: position.id },
+      data: {
+        state: "CLOSED",
+        closeDate: new Date(),
+        closeReason: input.reason,
+        closeSpreadPrice: result.filledPrice,
+        netPnl,
+        totalCommission,
+      },
+    });
+    return {
+      ibkrOrderId: result.ibkrOrderId,
+      status: result.status,
+      filledCredit: -result.filledPrice,
+      positionId: position.id,
+    };
+  }
+
+  return {
+    ibkrOrderId: result.ibkrOrderId,
+    status: result.status,
+    filledCredit: null,
+    positionId: position.id,
+  };
+}
