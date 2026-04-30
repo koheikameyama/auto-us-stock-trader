@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { calculatePearsonCorrelation, alignEquityCurves, dailyReturns } from "../correlation";
+import {
+  calculatePearsonCorrelation,
+  alignEquityCurves,
+  dailyReturns,
+  calculateCorrelationMatrix,
+} from "../correlation";
 import type { DailyEquity } from "../../types";
 
 function eq(date: string, totalEquity: number): DailyEquity {
@@ -81,5 +86,31 @@ describe("calculatePearsonCorrelation", () => {
 
   it("returns 0 for empty arrays", () => {
     expect(calculatePearsonCorrelation([], [])).toBe(0);
+  });
+});
+
+describe("calculateCorrelationMatrix", () => {
+  it("returns symmetric matrix with 1.0 diagonal", () => {
+    const a = [eq("2024-01-01", 100), eq("2024-01-02", 110), eq("2024-01-03", 120)];
+    const b = [eq("2024-01-01", 100), eq("2024-01-02", 105), eq("2024-01-03", 110)];
+    const matrix = calculateCorrelationMatrix([
+      { name: "A", curve: a },
+      { name: "B", curve: b },
+    ]);
+    expect(matrix.length).toBe(2);
+    expect(matrix[0].length).toBe(2);
+    expect(matrix[0][0]).toBeCloseTo(1.0, 5); // A vs A
+    expect(matrix[1][1]).toBeCloseTo(1.0, 5); // B vs B
+    expect(matrix[0][1]).toBeCloseTo(matrix[1][0], 5); // symmetric
+  });
+
+  it("identifies perfectly correlated curves", () => {
+    const a = [eq("2024-01-01", 100), eq("2024-01-02", 110), eq("2024-01-03", 120)];
+    const b = [eq("2024-01-01", 50), eq("2024-01-02", 55), eq("2024-01-03", 60)]; // same daily returns
+    const matrix = calculateCorrelationMatrix([
+      { name: "A", curve: a },
+      { name: "B", curve: b },
+    ]);
+    expect(matrix[0][1]).toBeCloseTo(1.0, 5);
   });
 });

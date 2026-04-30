@@ -62,3 +62,42 @@ export function calculatePearsonCorrelation(x: number[], y: number[]): number {
   if (denX === 0 || denY === 0) return 0;
   return num / Math.sqrt(denX * denY);
 }
+
+export interface NamedCurve {
+  name: string;
+  curve: DailyEquity[];
+}
+
+/**
+ * N 戦略間の相関行列 (Pearson) を計算。
+ * 共通期間で日次リターンを取り出し、ペアごとに Pearson 相関を計算する。
+ * 対称行列で対角は 1.0。
+ */
+export function calculateCorrelationMatrix(strategies: NamedCurve[]): number[][] {
+  const n = strategies.length;
+  const matrix: number[][] = Array.from({ length: n }, () => Array(n).fill(0));
+  for (let i = 0; i < n; i++) {
+    for (let j = 0; j < n; j++) {
+      if (i === j) {
+        matrix[i][j] = 1.0;
+      } else if (j > i) {
+        const aligned = alignEquityCurves(strategies[i].curve, strategies[j].curve);
+        // align で共通日付の equity が揃うので、daily return を取り直す
+        const a: number[] = [];
+        const b: number[] = [];
+        for (let k = 1; k < aligned.dates.length; k++) {
+          const prevA = aligned.equityA[k - 1];
+          const prevB = aligned.equityB[k - 1];
+          if (prevA > 0 && prevB > 0) {
+            a.push(aligned.equityA[k] / prevA - 1);
+            b.push(aligned.equityB[k] / prevB - 1);
+          }
+        }
+        matrix[i][j] = calculatePearsonCorrelation(a, b);
+      } else {
+        matrix[i][j] = matrix[j][i]; // symmetric
+      }
+    }
+  }
+  return matrix;
+}
