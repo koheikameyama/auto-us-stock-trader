@@ -1,7 +1,14 @@
 """
 Dual Momentum 用ETFバックフィル: SPY (米株), EFA (海外株), AGG (米国総合債券)
 Antonacci 古典的 GEM (Global Equities Momentum) 構成
+
+Usage:
+  python scripts/data/backfill_rotation_etfs.py                                    # 直近10年（デフォルト）
+  python scripts/data/backfill_rotation_etfs.py --start 2007-01-01                 # 期間指定
+  python scripts/data/backfill_rotation_etfs.py --tickers SPY,EFA,AGG              # 銘柄指定
+  python scripts/data/backfill_rotation_etfs.py --start 2007-01-01 --tickers SPY,EFA,AGG
 """
+import argparse
 import os, sys, uuid
 import pandas as pd
 import yfinance as yf
@@ -13,17 +20,32 @@ from lib.db import get_database_url
 
 DATABASE_URL = get_database_url()
 
-TICKERS = ["SPY", "EFA", "AGG", "QQQ", "IWM", "TLT", "GLD", "BND"]
+DEFAULT_TICKERS = ["SPY", "EFA", "AGG", "QQQ", "IWM", "TLT", "GLD", "BND"]
 PERIOD = "10y"
 
+parser = argparse.ArgumentParser(description="Dual Momentum 用 ETF backfill")
+parser.add_argument("--start", default=None, help="開始日 YYYY-MM-DD（指定時は PERIOD を上書き）")
+parser.add_argument("--tickers", default=None, help="カンマ区切り銘柄リスト（デフォルト: SPY,EFA,AGG,QQQ,IWM,TLT,GLD,BND）")
+args = parser.parse_args()
+
+TICKERS = [t.strip() for t in args.tickers.split(",")] if args.tickers else DEFAULT_TICKERS
+
 print(f"ETF取得: {TICKERS}")
+if args.start:
+    print(f"  期間: {args.start} ~ 今日")
+else:
+    print(f"  期間: 直近 {PERIOD}")
+
 conn = psycopg2.connect(DATABASE_URL)
 cur = conn.cursor()
 
 total = 0
 for ticker in TICKERS:
     try:
-        df = yf.download(ticker, period=PERIOD, progress=False, auto_adjust=False)
+        if args.start:
+            df = yf.download(ticker, start=args.start, progress=False, auto_adjust=False)
+        else:
+            df = yf.download(ticker, period=PERIOD, progress=False, auto_adjust=False)
         if df.empty:
             print(f"  {ticker}: なし"); continue
         if isinstance(df.columns, pd.MultiIndex):
