@@ -42,6 +42,28 @@ export interface OptionContract {
   impliedVol: number | null;
 }
 
+export interface OptionLeg {
+  conId: number;
+  action: "BUY" | "SELL";
+  ratio: number;
+}
+
+export interface ComboOrderRequest {
+  underlying: string;
+  legs: OptionLeg[];
+  totalQuantity: number;
+  limitPrice: number; // negative = NET CREDIT
+  tif: "DAY" | "GTC";
+}
+
+export interface OrderResult {
+  ibkrOrderId: number;
+  status: "SUBMITTED" | "FILLED" | "CANCELLED" | "REJECTED" | "TIMEOUT";
+  filledPrice?: number;
+  commission?: number;
+  message?: string;
+}
+
 export class IBKRClient {
   private api: IBApiNext;
   private config: Required<IBKRClientConfig>;
@@ -290,6 +312,138 @@ export class IBKRClient {
         sub.unsubscribe();
         resolve(result);
       }, 3_000); // 3 seconds per strike
+    });
+  }
+
+  /** 単一 OPT contract の conId を取得（Combo Order 構築用）*/
+  async qualifyOptionContract(
+    underlying: string,
+    expiry: string, // YYYYMMDD
+    strike: number,
+    right: "P" | "C",
+  ): Promise<number> {
+    if (!this.connected) throw new Error("Not connected");
+    const contract = {
+      symbol: underlying,
+      secType: "OPT",
+      exchange: "SMART",
+      currency: "USD",
+      lastTradeDateOrContractMonth: expiry,
+      strike,
+      right,
+      multiplier: "100",
+    };
+    const timeoutMs = 10_000;
+    const detailsPromise = this.api.getContractDetails(contract as any);
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(
+        () => reject(new Error("qualifyOptionContract timeout (10s)")),
+        timeoutMs,
+      );
+    });
+    const details = await Promise.race([detailsPromise, timeoutPromise]);
+    const arr = Array.isArray(details) ? details : [];
+    for (const d of arr) {
+      const c = (d as any).contract ?? d;
+      if (c?.conId != null) return c.conId as number;
+    }
+    throw new Error(
+      `Contract not found: ${underlying} ${expiry} ${strike}${right}`,
+    );
+  }
+
+  /** Combo Order を発注、約定 or タイムアウト (5 分) まで待つ */
+  async placeComboOrder(req: ComboOrderRequest): Promise<OrderResult> {
+    if (!this.connected) throw new Error("Not connected");
+
+    const combo: any = {
+      symbol: req.underlying,
+      secType: "BAG",
+      currency: "USD",
+      exchange: "SMART",
+      comboLegs: req.legs.map((leg) => ({
+        conId: leg.conId,
+        ratio: leg.ratio,
+        action: leg.action,
+        exchange: "SMART",
+      })),
+    };
+
+    const order: any = {
+      action: req.limitPrice < 0 ? "BUY" : "SELL",
+      orderType: "LMT",
+      totalQuantity: req.totalQuantity,
+      lmtPrice: req.limitPrice,
+      tif: req.tif,
+      transmit: true,
+    };
+
+    // 1. Place order, then 2. monitor via getOpenOrders Observable
+    const ibkrOrderId = await this.api.placeNewOrder(combo, order);
+
+    return new Promise<OrderResult>((resolve) => {
+      let settled = false;
+      const settle = (result: OrderResult) => {
+        if (settled) return;
+        settled = true;
+        sub.unsubscribe();
+        clearTimeout(timer);
+        resolve(result);
+      };
+
+      const sub = this.api.getOpenOrders().subscribe({
+        next: (update: any) => {
+          const all = update.all ?? [];
+          for (const openOrder of all) {
+            if (openOrder.orderId !== ibkrOrderId) continue;
+            const status = openOrder.orderStatus?.status;
+            if (!status) continue;
+            if (status === "Filled") {
+              settle({
+                ibkrOrderId,
+                status: "FILLED",
+                filledPrice: openOrder.orderStatus?.avgFillPrice,
+                commission: (openOrder.orderState as any)?.commission,
+              });
+              return;
+            }
+            if (status === "Cancelled" || status === "ApiCancelled") {
+              settle({
+                ibkrOrderId,
+                status: "CANCELLED",
+                message: `Order ${status}`,
+              });
+              return;
+            }
+            if (status === "Inactive") {
+              settle({
+                ibkrOrderId,
+                status: "REJECTED",
+                message: "Order inactive (likely rejected)",
+              });
+              return;
+            }
+          }
+        },
+        error: (e: any) => {
+          settle({
+            ibkrOrderId,
+            status: "REJECTED",
+            message: e?.message ?? String(e),
+          });
+        },
+      });
+
+      const timer = setTimeout(
+        () => {
+          settle({
+            ibkrOrderId,
+            status: "TIMEOUT",
+            message: "Order fill confirmation timed out (5 min)",
+          });
+        },
+        5 * 60 * 1000,
+      );
     });
   }
 
