@@ -39,6 +39,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@stoqey/ib": "^1.5.3",
     "dayjs": "^1.11.20",
     "p-limit": "^7.3.0",
     "technicalindicators": "^3.1.0"
