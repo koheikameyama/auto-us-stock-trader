@@ -368,7 +368,26 @@ async function main() {
 main()
   .then(() => process.exit(0))
   .catch(async (e) => {
-    console.error("❌ Daily runner failed:", e.message);
-    if (e.stack) console.error(e.stack);
+    console.error("❌ Daily runner failed:", e?.message ?? e);
+    if (e?.stack) console.error(e.stack);
+    try {
+      const prisma = new PrismaClient();
+      await prisma.errorLog.create({
+        data: {
+          category: "UNCAUGHT_EXCEPTION",
+          message: String(e?.message ?? e),
+          context: { stack: e?.stack ?? null },
+        },
+      });
+      await prisma.$disconnect();
+    } catch (logErr) {
+      console.error("Failed to write ErrorLog:", logErr);
+    }
+    try {
+      await sendSlack({
+        text: formatErrorAlert("UNCAUGHT_EXCEPTION", String(e?.message ?? e)),
+        level: "critical",
+      });
+    } catch {}
     process.exit(1);
   });
