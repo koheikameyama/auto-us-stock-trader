@@ -20,6 +20,62 @@ import type { TailTestResult } from "../framework/tail-test/types";
 import type { Trade, StrategyResult } from "../framework/strategy-result";
 import { MOMENTUM_THRESHOLDS } from "./tail-test-thresholds";
 
+/**
+ * Cross-Sectional Momentum 戦略を実行し StrategyResult を返す（library 用 entry point）。
+ * tail-test や report 生成は呼ばない。Phase 4 portfolio analysis から再利用する。
+ */
+export async function runMomentumStrategy(
+  startDate: string,
+  endDate: string,
+  budget?: number,
+): Promise<StrategyResult> {
+  const config: USMomentumBacktestConfig = {
+    ...US_MOMENTUM_DEFAULTS,
+    startDate,
+    endDate,
+    initialBudget: budget ?? US_MOMENTUM_DEFAULTS.initialBudget,
+    verbose: false,
+  };
+
+  const tickers = await getUSTickerCodes();
+  const [allData, vixData, indexData] = await Promise.all([
+    fetchUSHistoricalFromDB(tickers, startDate, endDate),
+    fetchVixFromDB(startDate, endDate),
+    fetchSP500FromDB(startDate, endDate),
+  ]);
+
+  const result = runUSMomentumBacktest(config, allData, vixData, indexData);
+
+  const trades: Trade[] = result.trades
+    .filter((t) => t.exitDate != null && t.netPnl != null)
+    .map((t) => ({
+      symbol: t.ticker,
+      entryDate: t.entryDate,
+      closeDate: t.exitDate ?? null,
+      netPnl: t.netPnl ?? null,
+      pnlPct: t.pnlPct ?? null,
+      holdingDays: t.holdingDays ?? null,
+      category: t.exitReason ?? undefined,
+    }));
+
+  const initial = config.initialBudget;
+
+  return {
+    strategyName: "momentum",
+    config: { ...config },
+    period: { start: startDate, end: endDate },
+    initialBudget: initial,
+    equityCurve: result.equityCurve,
+    trades,
+    metrics: {
+      winRate: result.metrics.winRate / 100,
+      profitFactor: result.metrics.profitFactor,
+      maxDrawdown: result.metrics.maxDrawdown / 100,
+      netReturnPct: result.metrics.netReturnPct / 100,
+    },
+  };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const getArg = (name: string) => {
@@ -189,9 +245,13 @@ async function main() {
   console.log(`Report: ${reportPath}`);
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch((e) => {
-    console.error(e);
-    process.exit(1);
-  });
+// CLI エントリー: 直接実行されたときのみ main() を呼ぶ
+const isMainModule = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
+if (isMainModule) {
+  main()
+    .then(() => process.exit(0))
+    .catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
+}
