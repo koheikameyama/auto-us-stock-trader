@@ -462,3 +462,45 @@ Phase 4 の `portfolio-correlation-matrix-YYYY-MM-DD.md` に以下が記録さ�
 - Phase 0 単独閾値で FAIL したが、これは "diversifier として不十分" の意味ではない
 - credit-spread が下落で死ぬ局面に対し dual-momentum がどれだけ補完するかは Phase 4 の相関分析で評価する
 - **Phase 1 (framework 抽象化リファクタ) に進む** — Phase 0 の踏み台コード (`dual-momentum-adapter.ts`, hardcoded report.ts assumptions) を `StrategyResult` interface に整理
+
+### Phase 1: tail-test framework 抽象化リファクタ (KOH-456, 2026-04-30 完了)
+
+**実装完了内容:**
+- `src/backtest/framework/strategy-result.ts` に `StrategyResult` / `Trade` interface 追加
+- `src/backtest/tail-test/*` を `src/backtest/framework/tail-test/*` に git mv（履歴保持）
+- "spread" 用語を "trade" にリネーム（`tradeCount` / `trades` / `worstTrade` / `pnlPerTrade` / `totalTrades`）
+- credit-spread thresholds を pass-fail から [credit-spread/tail-test-thresholds.ts](../../src/backtest/credit-spread/tail-test-thresholds.ts) に分離
+- credit-spread runner を [credit-spread/run-tail-test.ts](../../src/backtest/credit-spread/run-tail-test.ts) に移動 + StrategyResult 直接生成
+- dual-momentum runner を StrategyResult 直接生成に書き換え
+- `src/backtest/tail-test/dual-momentum-adapter.ts` 削除（踏み台コード）
+- [framework/correlation.ts](../../src/backtest/framework/correlation.ts) 追加（Pearson + alignEquityCurves + dailyReturns、TDD で 12 tests）
+- StrategyName casing 規約: `StrategyResult.strategyName` は kebab-case（"credit-spread"/"dual-momentum"）、display title は Title Case
+
+**回帰確認（数値完全一致）:**
+
+| Strategy | Period | 主要メトリクス（Phase 0 → Phase 1） | Verdict |
+|---|---|---|---|
+| credit-spread | 2020-2023 | 110 spreads, Win 88.18%, PF 1.86, CAGR 13.54%, Max DD 16.12% | PASS 7/7 |
+| dual-momentum | 2020-2023 | 6 trades, Win 66.7%, PF 8.33, CAGR 9.09%, Max DD 19.93% | PASS 5/5 (skipped 2) |
+| dual-momentum | 2007-2026 | 37 trades, Win 64.86%, PF 3.50, CAGR 5.62%, Max DD 32.58% | FAIL 3/5 (skipped 2) |
+
+全 56 tests → 69 tests, typecheck 0 errors を維持。
+
+**コミット履歴（7 commits）:**
+- `da4c80d` feat(framework): StrategyResult / Trade interface を追加
+- `027d733` refactor(framework): tail-test を framework/tail-test/ に移動 + Trade ベース化
+- `8f364a5` refactor(credit-spread): tail-test thresholds を credit-spread/ に切り出し
+- `c236226` refactor(dual-momentum): adapter を削除し StrategyResult 直接生成に変更
+- `2cd94d5` refactor(credit-spread): run-tail-test を credit-spread/ に移動 + StrategyResult 経由化
+- `a8aa6c0` refactor(framework): runner symmetry + framework spread vocab 除去
+- `448ed2d` feat(framework): correlation.ts (Pearson + alignEquityCurves + dailyReturns) を追加
+
+**次のフェーズへの判断:**
+framework が抽象化されたため、**Phase 2-A (PEAD) と Phase 2-B (Momentum) を並列実行可能**。各戦略は以下のパターンで実装:
+1. JP simulation を移管 + 純関数化（Phase 0 と同パターン）
+2. データ backfill（戦略毎の universe / 期間）
+3. `<strategy>/tail-test-thresholds.ts` 作成
+4. `<strategy>/run-tail-test.ts` 作成（StrategyResult 直接生成、adapter 不要）
+5. `package.json` script 追加
+
+framework 側は触らない。
