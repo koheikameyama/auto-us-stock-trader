@@ -6,7 +6,7 @@ describe("calculateBuyOrder", () => {
     // cash=10000, price=100, slip=0.05% (=5), commission=1
     // usableCash = 10000 - 1 - 5 = 9994
     // shares = floor(9994 / 100) = 99
-    // cashRemaining = 10000 - 99*100 - 1 - 5 = 99
+    // cashRemaining = 10000 - 99*100 - 1 - 5 = 94
     const result = calculateBuyOrder(10000, 100, 0.05, 1);
     expect(result.shares).toBe(99);
     expect(result.slippage).toBeCloseTo(5, 5);
