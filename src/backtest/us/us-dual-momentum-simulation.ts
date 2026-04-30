@@ -8,6 +8,9 @@
  *   4. 前回保有と異なれば全売却→新規購入
  */
 
+import { selectMomentumAsset } from "../dual-momentum/asset-selector";
+import { pctReturn } from "../dual-momentum/momentum-calculator";
+import { calculateBuyOrder, calculateSellOrder } from "../dual-momentum/order-calculator";
 import { calculateMetrics } from "../metrics";
 import type {
   USDualMomentumBacktestConfig,
@@ -18,14 +21,6 @@ import type {
 } from "./us-dual-momentum-types";
 import type { OHLCVData } from "../../core/technical-analysis";
 import type { SimulatedPosition, DailyEquity } from "../types";
-
-function pctReturn(prices: number[], lookback: number): number | null {
-  if (prices.length < lookback + 1) return null;
-  const recent = prices[prices.length - 1];
-  const past = prices[prices.length - 1 - lookback];
-  if (past <= 0) return null;
-  return ((recent - past) / past) * 100;
-}
 
 export function runUSDualMomentumBacktest(
   config: USDualMomentumBacktestConfig,
@@ -77,18 +72,14 @@ export function runUSDualMomentumBacktest(
         const ret = pctReturn(prices, config.lookbackDays);
         if (ret != null) rankings.push({ ticker, momentum: ret });
       }
-      rankings.sort((a, b) => b.momentum - a.momentum);
-
-      let selected: string;
-      let reason: "best_equity" | "risk_off";
-
-      if (rankings.length > 0 && rankings[0].momentum > config.absoluteMomentumThreshold) {
-        selected = rankings[0].ticker;
-        reason = "best_equity";
-      } else {
-        selected = config.riskOffAsset;
-        reason = "risk_off";
-      }
+      const selection = selectMomentumAsset(
+        rankings,
+        config.absoluteMomentumThreshold,
+        config.riskOffAsset
+      );
+      const selected = selection.selected;
+      const reason = selection.reason;
+      const sortedRankings = selection.sortedRankings;
 
       const switched = currentTicker !== selected;
 
@@ -97,9 +88,8 @@ export function runUSDualMomentumBacktest(
         if (currentTicker && currentShares > 0) {
           const closeM = closeByDate.get(currentTicker)!;
           const exitPrice = closeM.get(today)!;
-          const proceeds = currentShares * exitPrice;
-          const slippage = proceeds * (config.slippagePct / 100);
-          cash += proceeds - config.commissionPerTrade - slippage;
+          const sell = calculateSellOrder(currentShares, exitPrice, config.slippagePct, config.commissionPerTrade);
+          cash += sell.cashReceived;
 
           const lastPos = positions[positions.length - 1];
           if (lastPos && lastPos.exitDate === undefined) {
@@ -117,19 +107,17 @@ export function runUSDualMomentumBacktest(
         // 新規ポジ購入
         const newPriceM = closeByDate.get(selected)!;
         const newPrice = newPriceM.get(today)!;
-        const slippage = cash * (config.slippagePct / 100);
-        const usableCash = cash - config.commissionPerTrade - slippage;
-        const shares = Math.floor(usableCash / newPrice);
-        if (shares > 0) {
-          cash -= shares * newPrice + config.commissionPerTrade + slippage;
+        const buy = calculateBuyOrder(cash, newPrice, config.slippagePct, config.commissionPerTrade);
+        if (buy.shares > 0) {
+          cash = buy.cashRemaining;
           currentTicker = selected;
-          currentShares = shares;
+          currentShares = buy.shares;
 
           positions.push({
             ticker: selected,
             entryDate: today,
             entryPrice: newPrice,
-            shares,
+            shares: buy.shares,
           });
         }
       }
@@ -138,7 +126,7 @@ export function runUSDualMomentumBacktest(
         date: today,
         selectedAsset: selected,
         selectedReason: reason,
-        rankings,
+        rankings: sortedRankings,
         prevAsset: currentTicker,
         switched,
       });
