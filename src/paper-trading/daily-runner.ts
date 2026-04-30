@@ -18,7 +18,7 @@ import { generateEntrySignal } from "../backtest/credit-spread/signal-generator"
 import { US_CREDIT_SPREAD_DEFAULTS } from "../backtest/us/us-credit-spread-config";
 import type { SimulatedSpread } from "../backtest/us/us-credit-spread-types";
 import { fetchIndexFromDB } from "../backtest/data-fetcher";
-import { placeNewSpreadOrder } from "./order-manager";
+import { placeNewSpreadOrder, closeSpreadOrder, expirePosition } from "./order-manager";
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
@@ -108,22 +108,46 @@ async function main() {
 
     console.log(`  ${dbPos.symbol} ${dbPos.shortStrike}/${dbPos.longStrike}: ${action.action}${action.action !== "HOLD" ? `/${action.reason}` : ""}`);
 
-    if (action.action === "CLOSE" || action.action === "EXPIRE") {
-      // 仮で SignalLog だけ記録（実発注は Phase D 以降で）
-      await prisma.signalLog.create({
-        data: {
-          date: new Date(today),
-          signalType: "CLOSE",
-          reason: action.reason,
-          details: {
-            shortStrike: dbPos.shortStrike,
-            longStrike: dbPos.longStrike,
-            currentValue: (action as any).currentValue ?? null,
-            finalValue: (action as any).finalValue ?? null,
-          },
-        },
+    if (action.action === "CLOSE") {
+      if (DRY_RUN) {
+        console.log(`  [DRY RUN] Would close: reason=${action.reason}, value=${action.currentValue}`);
+      } else {
+        try {
+          const closed = await closeSpreadOrder(ibkr, prisma, {
+            positionId: dbPos.id,
+            reason: action.reason,
+            currentSpreadValue: action.currentValue,
+          });
+          console.log(`  Closed ibkrOrderId=${closed.ibkrOrderId}, status=${closed.status}`);
+        } catch (e: any) {
+          console.error(`  ❌ Close failed: ${e.message}`);
+          await prisma.errorLog.create({
+            data: { category: "CLOSE_FAILED", message: e.message, context: { positionId: dbPos.id, reason: action.reason } },
+          });
+        }
+      }
+    } else if (action.action === "EXPIRE") {
+      await expirePosition(prisma, {
+        positionId: dbPos.id,
+        reason: action.reason,
+        finalValue: action.finalValue,
       });
+      console.log(`  Expired: reason=${action.reason}, value=${action.finalValue}`);
     }
+
+    await prisma.signalLog.create({
+      data: {
+        date: new Date(today),
+        signalType: action.action,
+        reason: action.action === "HOLD" ? "hold" : action.reason,
+        details: {
+          shortStrike: dbPos.shortStrike,
+          longStrike: dbPos.longStrike,
+          currentValue: (action as any).currentValue ?? null,
+          finalValue: (action as any).finalValue ?? null,
+        },
+      },
+    });
   }
 
   // ── 6. equity 計算 + DD stop 状態遷移 ──
