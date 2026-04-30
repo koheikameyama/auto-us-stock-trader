@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { placeNewSpreadOrder, isDuplicateOrder } from "../order-manager";
+import { placeNewSpreadOrder, isDuplicateOrder, closeSpreadOrder } from "../order-manager";
 
 const prisma = new PrismaClient();
 
@@ -66,5 +66,77 @@ describe("order-manager", () => {
         { dryRun: true },
       ),
     ).rejects.toThrow(/Duplicate/);
+  });
+
+  describe("closeSpreadOrder", () => {
+    it("submits a debit combo order (BUY back short, SELL long) and updates Position state to CLOSED", async () => {
+      const mockIbkr = {
+        qualifyOptionContract: vi.fn()
+          .mockResolvedValueOnce(111) // short put conId
+          .mockResolvedValueOnce(222), // long put conId
+        placeComboOrder: vi.fn().mockResolvedValue({
+          ibkrOrderId: 999,
+          status: "FILLED",
+          filledPrice: 0.30,    // debit (positive limit)
+          commission: 1.20,
+        }),
+      } as any;
+
+      const position = await prisma.position.create({
+        data: {
+          symbol: "SPY",
+          shortStrike: 480,
+          longStrike: 475,
+          expiry: new Date("2026-06-19"),
+          contracts: 1,
+          creditReceived: 0.85,
+          entryDate: new Date("2026-05-01"),
+          state: "OPEN",
+          totalCommission: 1.20,
+        },
+      });
+
+      const result = await closeSpreadOrder(mockIbkr, prisma, {
+        positionId: position.id,
+        reason: "profit_target",
+        currentSpreadValue: 0.30,
+      });
+
+      expect(result.status).toBe("FILLED");
+      expect(mockIbkr.placeComboOrder).toHaveBeenCalledWith(expect.objectContaining({
+        legs: [
+          expect.objectContaining({ conId: 111, action: "BUY" }),
+          expect.objectContaining({ conId: 222, action: "SELL" }),
+        ],
+        limitPrice: 0.30,
+      }));
+
+      const updated = await prisma.position.findUnique({ where: { id: position.id } });
+      expect(updated?.state).toBe("CLOSED");
+      expect(updated?.closeReason).toBe("profit_target");
+      expect(updated?.closeSpreadPrice).toBe(0.30);
+      expect(updated?.netPnl).toBeCloseTo(52.60, 2);
+
+      const order = await prisma.tradingOrder.findFirst({
+        where: { ibkrOrderId: 999 },
+      });
+      expect(order?.orderType).toBe("EXIT");
+      expect(order?.positionId).toBe(position.id);
+    });
+
+    it("throws if Position is already CLOSED (duplicate close prevention)", async () => {
+      const position = await prisma.position.create({
+        data: {
+          symbol: "SPY", shortStrike: 480, longStrike: 475,
+          expiry: new Date("2026-06-19"), contracts: 1, creditReceived: 0.85,
+          entryDate: new Date("2026-05-01"), state: "CLOSED",
+        },
+      });
+      await expect(
+        closeSpreadOrder({} as any, prisma, {
+          positionId: position.id, reason: "profit_target", currentSpreadValue: 0.30,
+        }),
+      ).rejects.toThrow(/already closed/i);
+    });
   });
 });
