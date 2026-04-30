@@ -56,8 +56,8 @@ export interface ThresholdCheck {
   name: string;
   category: ThresholdCategory;
   actual: number | null;
-  threshold: number;
-  pass: boolean | null;  // null = data unavailable
+  threshold: number | null;
+  pass: boolean | null;  // null = data unavailable or threshold not applicable
   comment?: string;
 }
 

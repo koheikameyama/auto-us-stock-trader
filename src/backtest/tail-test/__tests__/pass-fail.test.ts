@@ -51,4 +51,27 @@ describe("evaluateThresholds", () => {
     expect(tailDDCheck?.pass).toBeNull();
     expect(verdict.overallPass).toBe(true);
   });
+
+  it("skips check when threshold is null (strategy not applicable)", () => {
+    const verdict = evaluateThresholds({
+      winRate: 0.5,        // would FAIL with default 0.7
+      profitFactor: 1.5,
+      cagr: 0.12,
+      maxDrawdown: 0.20,
+      cvar5: -200,
+      worstWindowDD: 0.25,
+      worstWindowPnlPct: -0.30,
+      maxLossDollar: 500,
+      thresholds: {
+        ...DEFAULT_THRESHOLDS,
+        winRateMin: null,    // skipped
+        cvar5MinRatio: null, // skipped
+      },
+    });
+    const winRateCheck = verdict.checks.find((c) => c.name === "Win Rate");
+    expect(winRateCheck?.pass).toBeNull();
+    const cvarCheck = verdict.checks.find((c) => c.name.includes("CVaR"));
+    expect(cvarCheck?.pass).toBeNull();
+    expect(verdict.overallPass).toBe(true);  // skipped checks don't fail
+  });
 });
