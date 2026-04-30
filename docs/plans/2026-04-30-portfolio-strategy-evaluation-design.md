@@ -504,3 +504,41 @@ framework が抽象化されたため、**Phase 2-A (PEAD) と Phase 2-B (Moment
 5. `package.json` script 追加
 
 framework 側は触らない。
+
+### Phase 2-A: PEAD (KOH-457, 2026-05-01 完了)
+
+**実装完了内容:**
+- 純関数抽出 (TDD): [signal-detector.ts](../../src/backtest/pead/signal-detector.ts) (gap+volume+陽線判定), [stop-loss-calculator.ts](../../src/backtest/pead/stop-loss-calculator.ts) (ATR/maxLoss キャップ), [quantity-adjuster.ts](../../src/backtest/pead/quantity-adjuster.ts) (VIX elevated 時半減) — 各 5〜6 vitest cases
+- [us-pead-simulation.ts](../../src/backtest/us/us-pead-simulation.ts) ラッパー化リファクタ (refactor 前後で 2020-2023 の出力 bit-identical)
+- [PEAD_THRESHOLDS](../../src/backtest/pead/tail-test-thresholds.ts) (Tier 1) 定義
+- [pead/run-tail-test.ts](../../src/backtest/pead/run-tail-test.ts) 作成 (Phase 1 framework 経由、StrategyResult 直接生成、ticker chunked fetch で Prisma napi limit 回避)
+- `tail-test:pead` package.json script 追加
+- レポート: [docs/reports/pead-tail-2026-05-01.md](../reports/pead-tail-2026-05-01.md)
+
+**主要結果（2015-01-01〜2026-05-01, 約 11 年, 242 trades）:**
+
+| 指標 | 値 | 閾値 | 判定 |
+|---|---|---|---|
+| Win Rate | 41.32% | ≥ 55% | ❌ FAIL |
+| Profit Factor | 0.39 | ≥ 1.5 | ❌ FAIL |
+| CAGR | -2.38% | ≥ 8% | ❌ FAIL |
+| Max DD | 24.59% | ≤ 35% | ✅ PASS |
+| CVaR 5% | $-24.57 | ≥ $-82.50 | ✅ PASS |
+| テール期間 DD（最悪） | 1.40% (2022 Bear) | ≤ 40% | ✅ PASS |
+| テール期間 PnL%（最悪） | -1.18% | ≥ -45% | ✅ PASS |
+
+**Verdict: ❌ FAIL 4/7 checks (skipped 0)**
+
+**観察:**
+- 平時 metrics（Win Rate / Profit Factor / CAGR）が全て閾値を割り、PEAD は現行パラメータでは単独 viable ではない
+- Net Return -23.82%, Profit Factor 0.39 — 出来高サージ＋gap で陽線確定後の終値エントリーが大量の負け trade（242 中 142 loss）を生んでいる
+- テール側は閾値に対して大きな余裕（CVaR $-24.57 vs cap $-82.50, 最悪 DD 1.40%）— 個別株 5% maxLossPct と max 3 positions による per-trade 損失上限が機能している
+- 事前定義イベント期間で trade 0 のものが多く（COVID, Volmageddon 等は 2015 以降の earnings データ範囲外もしくは market filter で entry 抑制）
+- max DD 24.59% の peak-to-trough は 2020-11-17〜2026-04-24 の長期 drift（未復元）— 平時の負け continuation
+- VIX レジーム別 PnL/trade はいずれも負（>30 は 0 trade、20-30 で $-1.46、≤20 で $-4.13）
+
+**次のフェーズへの判断:**
+- Phase 2-A 単独閾値で FAIL したが、credit-spread と低相関の可能性は残る（Phase 4 の相関分析で評価）
+- 現状のまま portfolio 補完候補としては推奨度低。パラメータチューニング（gapMinPct/volSurgeRatio 引き上げ等）は Phase 4 後の意思決定に委ねる
+- Phase 2-B (Momentum) と並列で実装、Phase 4 で credit-spread との相関分析予定
+
