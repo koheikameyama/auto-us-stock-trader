@@ -1,6 +1,6 @@
-// src/backtest/tail-test/types.ts
-import type { DailyEquity } from "../types";
-import type { SimulatedSpread } from "../us/us-credit-spread-types";
+// src/backtest/framework/tail-test/types.ts
+import type { DailyEquity } from "../../types";
+import type { Trade } from "../strategy-result";
 
 export interface StressWindow {
   name: string;
@@ -18,7 +18,7 @@ export interface DDPeriod {
   ddDollar: number;
   durationDays: number; // peak から trough まで
   matchedEvent: string | null;
-  tradesInPeriod: SimulatedSpread[];
+  tradesInPeriod: Trade[];
 }
 
 export interface WindowAnalysis {
@@ -29,7 +29,7 @@ export interface WindowAnalysis {
   pnl: number;
   pnlPct: number;
   ddPct: number;
-  spreadCount: number;
+  tradeCount: number;
   winRate: number;
   totalPnl: number;
 }
@@ -37,7 +37,7 @@ export interface WindowAnalysis {
 export interface TailMetrics {
   cvar5: number;
   cvar1: number;
-  worstSpread: SimulatedSpread | null;
+  worstTrade: Trade | null;
   worstDay: { date: string; dailyPnl: number } | null;
   consecutiveLossCount: number;
 }
@@ -45,9 +45,9 @@ export interface TailMetrics {
 export interface VixBucket {
   label: ">30" | "20-30" | "≤20";
   tradingDays: number;
-  spreadCount: number;
+  tradeCount: number;
   winRate: number;
-  pnlPerSpread: number;
+  pnlPerTrade: number;
 }
 
 export type ThresholdCategory = "平時" | "テール";
@@ -71,7 +71,7 @@ export interface TailTestResult {
   configSummary: Record<string, unknown>;
   startDate: string;
   endDate: string;
-  totalSpreads: number;
+  totalTrades: number;
   baseMetrics: {
     winRate: number;
     profitFactor: number;
@@ -85,5 +85,5 @@ export interface TailTestResult {
   vixBuckets: VixBucket[];
   verdict: PassFailVerdict;
   equityCurve: DailyEquity[];
-  closedSpreads: SimulatedSpread[];
+  trades: Trade[];
 }

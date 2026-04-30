@@ -20,7 +20,7 @@ export function generateMarkdownReport(
     lines.push(`- ${k}: ${v2}`);
   }
   lines.push(`- 期間: ${result.startDate} 〜 ${result.endDate}`);
-  lines.push(`- 総 spread 数: ${result.totalSpreads}`);
+  lines.push(`- 総 trade 数: ${result.totalTrades}`);
   lines.push("");
   lines.push("## 平時メトリクス");
   lines.push("| 指標 | 値 |");
@@ -37,7 +37,7 @@ export function generateMarkdownReport(
   lines.push(`| CVaR 5% | ${dollar(result.tailMetrics.cvar5)} |`);
   lines.push(`| CVaR 1% | ${dollar(result.tailMetrics.cvar1)} |`);
   lines.push(
-    `| 最悪 spread | ${result.tailMetrics.worstSpread ? dollar(result.tailMetrics.worstSpread.netPnl ?? 0) : "-"} |`,
+    `| 最悪 trade | ${result.tailMetrics.worstTrade ? dollar(result.tailMetrics.worstTrade.netPnl ?? 0) : "-"} |`,
   );
   lines.push(`| 最大連敗 | ${result.tailMetrics.consecutiveLossCount} |`);
   lines.push("");
@@ -59,30 +59,30 @@ export function generateMarkdownReport(
   });
   lines.push("");
   lines.push("## 事前定義イベント");
-  lines.push("| イベント | 期間 | spread | 勝率 | PnL | DD |");
+  lines.push("| イベント | 期間 | trade | 勝率 | PnL | DD |");
   lines.push("|---|---|---|---|---|---|");
   for (const w of result.stressWindows) {
     if (!w.dataAvailable) {
       lines.push(`| ${w.window.name} | ${w.window.start} 〜 ${w.window.end} | (データなし) | - | - | - |`);
     } else {
       lines.push(
-        `| ${w.window.name} | ${w.window.start} 〜 ${w.window.end} | ${w.spreadCount} | ${pct(w.winRate)} | ${dollar(w.totalPnl)} | ${pct(w.ddPct)} |`,
+        `| ${w.window.name} | ${w.window.start} 〜 ${w.window.end} | ${w.tradeCount} | ${pct(w.winRate)} | ${dollar(w.totalPnl)} | ${pct(w.ddPct)} |`,
       );
     }
   }
   lines.push("");
   lines.push("## VIX レジーム");
-  lines.push("| Bucket | 取引日数 | spread | 勝率 | PnL/spread |");
+  lines.push("| Bucket | 取引日数 | trade | 勝率 | PnL/trade |");
   lines.push("|---|---|---|---|---|");
   for (const b of result.vixBuckets) {
     lines.push(
-      `| ${b.label} | ${b.tradingDays} | ${b.spreadCount} | ${pct(b.winRate)} | ${dollar(b.pnlPerSpread)} |`,
+      `| ${b.label} | ${b.tradingDays} | ${b.tradeCount} | ${pct(b.winRate)} | ${dollar(b.pnlPerTrade)} |`,
     );
   }
   lines.push("");
   lines.push("## 詳細");
   lines.push("- equity-curve.csv: 同階層に出力（date, cash, totalEquity）");
-  lines.push("- spreads.csv: 同階層に出力（各 spread の明細）");
+  lines.push("- trades.csv: 同階層に出力（各 trade の明細）");
   return lines.join("\n");
 }
 

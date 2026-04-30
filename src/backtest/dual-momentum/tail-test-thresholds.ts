@@ -1,4 +1,4 @@
-import type { DefaultThresholds } from "../tail-test/pass-fail";
+import type { DefaultThresholds } from "../framework/tail-test/pass-fail";
 
 /**
  * Dual Momentum 用 tail-test 閾値（暫定値）。

@@ -7,7 +7,7 @@ describe("generateMarkdownReport", () => {
       configSummary: { underlyingSymbol: "SPY", shortPutDelta: 0.20 },
       startDate: "2007-01-03",
       endDate: "2026-04-28",
-      totalSpreads: 412,
+      totalTrades: 412,
       baseMetrics: {
         winRate: 0.75,
         profitFactor: 1.42,
@@ -20,7 +20,7 @@ describe("generateMarkdownReport", () => {
       tailMetrics: {
         cvar5: -240,
         cvar1: -480,
-        worstSpread: null,
+        worstTrade: null,
         worstDay: null,
         consecutiveLossCount: 4,
       },
@@ -39,7 +39,7 @@ describe("generateMarkdownReport", () => {
         ],
       },
       equityCurve: [],
-      closedSpreads: [],
+      trades: [],
     });
     expect(md).toContain("# SPY Credit Spread");
     expect(md).toContain("PASS");
