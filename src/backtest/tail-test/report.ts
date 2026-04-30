@@ -1,11 +1,14 @@
 import type { TailTestResult } from "./types";
 
-export function generateMarkdownReport(result: TailTestResult): string {
+export function generateMarkdownReport(
+  result: TailTestResult,
+  strategyName: string = "SPY Credit Spread",
+): string {
   const m = result.baseMetrics;
   const v = result.verdict;
   const lines: string[] = [];
 
-  lines.push(`# SPY Credit Spread テール耐性検証レポート — ${todayString()}`);
+  lines.push(`# ${strategyName} テール耐性検証レポート — ${todayString()}`);
   lines.push("");
   lines.push("## 結論");
   lines.push(v.overallPass ? `✅ **PASS**（${v.summary}）` : `❌ **FAIL**（${v.summary}）`);

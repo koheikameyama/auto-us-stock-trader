@@ -129,7 +129,7 @@ async function main() {
     outDir,
     `dual-momentum-tail-${today}${suffix}.md`,
   );
-  fs.writeFileSync(reportPath, generateMarkdownReport(tailResult), "utf-8");
+  fs.writeFileSync(reportPath, generateMarkdownReport(tailResult, "Dual Momentum"), "utf-8");
 
   // ── ターミナル出力 ──
   console.log("\n" + "=".repeat(60));
