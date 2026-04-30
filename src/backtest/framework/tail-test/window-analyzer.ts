@@ -1,18 +1,18 @@
-import type { DailyEquity } from "../types";
-import type { SimulatedSpread } from "../us/us-credit-spread-types";
+import type { DailyEquity } from "../../types";
+import type { Trade } from "../strategy-result";
 import type { DDPeriod, StressWindow, WindowAnalysis } from "./types";
 
 export function analyzeWindow(
   window: StressWindow,
   equityCurve: DailyEquity[],
-  closedSpreads: SimulatedSpread[],
+  trades: Trade[],
 ): WindowAnalysis {
   const inWindow = equityCurve.filter((e) => e.date >= window.start && e.date <= window.end);
   if (inWindow.length === 0) {
     return {
       window, dataAvailable: false,
       startEquity: 0, endEquity: 0, pnl: 0, pnlPct: 0, ddPct: 0,
-      spreadCount: 0, winRate: 0, totalPnl: 0,
+      tradeCount: 0, winRate: 0, totalPnl: 0,
     };
   }
   const startEquity = inWindow[0].totalEquity;
@@ -25,13 +25,13 @@ export function analyzeWindow(
     if (dd > maxDD) maxDD = dd;
   }
 
-  const inWindowSpreads = closedSpreads.filter((s) => {
-    const enterIn = s.entryDate >= window.start && s.entryDate <= window.end;
-    const closeIn = s.closeDate ? s.closeDate >= window.start && s.closeDate <= window.end : false;
+  const inWindowTrades = trades.filter((t) => {
+    const enterIn = t.entryDate >= window.start && t.entryDate <= window.end;
+    const closeIn = t.closeDate ? t.closeDate >= window.start && t.closeDate <= window.end : false;
     return enterIn || closeIn;
   });
-  const wins = inWindowSpreads.filter((s) => (s.netPnl ?? 0) > 0).length;
-  const totalPnl = inWindowSpreads.reduce((acc, s) => acc + (s.netPnl ?? 0), 0);
+  const wins = inWindowTrades.filter((t) => (t.netPnl ?? 0) > 0).length;
+  const totalPnl = inWindowTrades.reduce((acc, t) => acc + (t.netPnl ?? 0), 0);
 
   return {
     window, dataAvailable: true,
@@ -39,8 +39,8 @@ export function analyzeWindow(
     pnl: endEquity - startEquity,
     pnlPct: (endEquity - startEquity) / startEquity,
     ddPct: maxDD,
-    spreadCount: inWindowSpreads.length,
-    winRate: inWindowSpreads.length === 0 ? 0 : wins / inWindowSpreads.length,
+    tradeCount: inWindowTrades.length,
+    winRate: inWindowTrades.length === 0 ? 0 : wins / inWindowTrades.length,
     totalPnl,
   };
 }

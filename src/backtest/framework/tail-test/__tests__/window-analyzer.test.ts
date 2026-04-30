@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { analyzeWindow, tagDDsWithEvents } from "../window-analyzer";
-import type { DailyEquity } from "../../types";
-import type { SimulatedSpread } from "../../us/us-credit-spread-types";
+import type { DailyEquity } from "../../../types";
+import type { Trade } from "../../strategy-result";
 import type { DDPeriod, StressWindow } from "../types";
 
 function eq(date: string, totalEquity: number): DailyEquity {
@@ -18,8 +18,8 @@ describe("analyzeWindow", () => {
   const window: StressWindow = { name: "COVID-19", start: "2020-02-15", end: "2020-04-30" };
 
   it("calculates pnl, ddPct, etc. for given window", () => {
-    const spreads: SimulatedSpread[] = [];
-    const r = analyzeWindow(window, curve, spreads);
+    const trades: Trade[] = [];
+    const r = analyzeWindow(window, curve, trades);
     expect(r.dataAvailable).toBe(true);
     expect(r.startEquity).toBe(90); // 2020-02-28 (first day in window)
     expect(r.endEquity).toBe(95);

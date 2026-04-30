@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { extractDDPeriods } from "../dd-extractor";
-import type { DailyEquity } from "../../types";
+import type { DailyEquity } from "../../../types";
 
 function eq(date: string, totalEquity: number): DailyEquity {
   return { date, cash: totalEquity, positionsValue: 0, totalEquity, openPositionCount: 0 };

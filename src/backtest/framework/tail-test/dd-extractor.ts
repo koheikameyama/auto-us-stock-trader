@@ -1,4 +1,4 @@
-import type { DailyEquity } from "../types";
+import type { DailyEquity } from "../../types";
 import type { DDPeriod } from "./types";
 
 /**

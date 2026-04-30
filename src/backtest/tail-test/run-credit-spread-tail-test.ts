@@ -6,13 +6,14 @@ import { US_CREDIT_SPREAD_DEFAULTS } from "../us/us-credit-spread-config";
 import { runUSCreditSpreadBacktest } from "../us/us-credit-spread-simulation";
 import { fetchSP500FromDB, fetchVixFromDB } from "../us/us-data-fetcher";
 import type { USCreditSpreadBacktestConfig } from "../us/us-credit-spread-types";
-import { extractDDPeriods } from "./dd-extractor";
-import { analyzeWindow, tagDDsWithEvents } from "./window-analyzer";
-import { calculateTailMetrics, calculateVixBuckets } from "./tail-metrics";
-import { evaluateThresholds, DEFAULT_THRESHOLDS } from "./pass-fail";
-import { generateMarkdownReport } from "./report";
-import { STRESS_WINDOWS } from "./stress-windows";
-import type { TailTestResult } from "./types";
+import { extractDDPeriods } from "../framework/tail-test/dd-extractor";
+import { analyzeWindow, tagDDsWithEvents } from "../framework/tail-test/window-analyzer";
+import { calculateTailMetrics, calculateVixBuckets } from "../framework/tail-test/tail-metrics";
+import { evaluateThresholds, DEFAULT_THRESHOLDS } from "../framework/tail-test/pass-fail";
+import { generateMarkdownReport } from "../framework/tail-test/report";
+import { STRESS_WINDOWS } from "../framework/tail-test/stress-windows";
+import type { TailTestResult } from "../framework/tail-test/types";
+import type { Trade } from "../framework/strategy-result";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -48,12 +49,23 @@ async function main() {
 
   // ── 後処理 ──
   const closed = result.spreads.filter((s) => s.state === "CLOSED");
+  // SimulatedSpread → Trade 変換（framework は Trade を期待する）
+  const trades: Trade[] = closed.map((s) => ({
+    symbol: s.underlyingSymbol,
+    entryDate: s.entryDate,
+    closeDate: s.closeDate ?? null,
+    netPnl: s.netPnl ?? null,
+    pnlPct: null,
+    holdingDays: null,
+    category: s.closeReason,
+  }));
+
   const ddPeriods = extractDDPeriods(result.equityCurve, 5);
   const taggedDDs = tagDDsWithEvents(ddPeriods, STRESS_WINDOWS);
-  const stressAnalyses = STRESS_WINDOWS.map((w) => analyzeWindow(w, result.equityCurve, closed));
-  const tailMetrics = calculateTailMetrics(result.spreads, result.equityCurve);
+  const stressAnalyses = STRESS_WINDOWS.map((w) => analyzeWindow(w, result.equityCurve, trades));
+  const tailMetrics = calculateTailMetrics(trades, result.equityCurve);
   const tradingDays = result.equityCurve.map((e) => e.date);
-  const vixBuckets = calculateVixBuckets(tradingDays, vix, closed);
+  const vixBuckets = calculateVixBuckets(tradingDays, vix, trades);
 
   // CAGR
   const initial = config.initialBudget;
@@ -91,7 +103,7 @@ async function main() {
     },
     startDate,
     endDate,
-    totalSpreads: result.metrics.totalSpreads,
+    totalTrades: result.metrics.totalSpreads,
     baseMetrics: {
       winRate: result.metrics.winRate / 100,
       profitFactor: result.metrics.profitFactor,
@@ -105,7 +117,7 @@ async function main() {
     vixBuckets,
     verdict,
     equityCurve: result.equityCurve,
-    closedSpreads: closed,
+    trades,
   };
 
   // ── 出力 ──

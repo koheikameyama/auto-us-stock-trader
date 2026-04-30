@@ -5,14 +5,15 @@ import { US_DUAL_MOMENTUM_DEFAULTS } from "../us/us-dual-momentum-config";
 import { runUSDualMomentumBacktest } from "../us/us-dual-momentum-simulation";
 import { fetchUSHistoricalFromDB } from "../us/us-data-fetcher";
 import type { USDualMomentumBacktestConfig } from "../us/us-dual-momentum-types";
-import { extractDDPeriods } from "../tail-test/dd-extractor";
-import { analyzeWindow, tagDDsWithEvents } from "../tail-test/window-analyzer";
-import { calculateTailMetrics } from "../tail-test/tail-metrics";
-import { evaluateThresholds } from "../tail-test/pass-fail";
-import { generateMarkdownReport } from "../tail-test/report";
-import { STRESS_WINDOWS } from "../tail-test/stress-windows";
+import { extractDDPeriods } from "../framework/tail-test/dd-extractor";
+import { analyzeWindow, tagDDsWithEvents } from "../framework/tail-test/window-analyzer";
+import { calculateTailMetrics } from "../framework/tail-test/tail-metrics";
+import { evaluateThresholds } from "../framework/tail-test/pass-fail";
+import { generateMarkdownReport } from "../framework/tail-test/report";
+import { STRESS_WINDOWS } from "../framework/tail-test/stress-windows";
 import { rotationPositionsToSpreads } from "../tail-test/dual-momentum-adapter";
-import type { TailTestResult } from "../tail-test/types";
+import type { TailTestResult } from "../framework/tail-test/types";
+import type { Trade } from "../framework/strategy-result";
 import { DUAL_MOMENTUM_THRESHOLDS } from "./tail-test-thresholds";
 
 async function main() {
@@ -53,16 +54,25 @@ async function main() {
   console.log("\nRunning simulation...");
   const result = runUSDualMomentumBacktest(config, etfMap);
 
-  // ── Adapter: rotation positions -> SimulatedSpread 互換 ──
-  const spreads = rotationPositionsToSpreads(result.positions);
+  // ── Adapter: rotation positions -> SimulatedSpread 互換 → Trade 変換 ──
+  const adaptedSpreads = rotationPositionsToSpreads(result.positions);
+  const trades: Trade[] = adaptedSpreads.map((s) => ({
+    symbol: s.underlyingSymbol,
+    entryDate: s.entryDate,
+    closeDate: s.closeDate ?? null,
+    netPnl: s.netPnl ?? null,
+    pnlPct: null,
+    holdingDays: null,
+    category: s.closeReason,
+  }));
 
   // ── tail-test 共通処理 ──
   const ddPeriods = extractDDPeriods(result.equityCurve, 5);
   const taggedDDs = tagDDsWithEvents(ddPeriods, STRESS_WINDOWS);
   const stressAnalyses = STRESS_WINDOWS.map((w) =>
-    analyzeWindow(w, result.equityCurve, spreads),
+    analyzeWindow(w, result.equityCurve, trades),
   );
-  const tailMetrics = calculateTailMetrics(spreads, result.equityCurve);
+  const tailMetrics = calculateTailMetrics(trades, result.equityCurve);
 
   const initial = config.initialBudget;
   const finalEq =
@@ -104,7 +114,7 @@ async function main() {
     },
     startDate,
     endDate,
-    totalSpreads: spreads.length,
+    totalTrades: trades.length,
     baseMetrics: {
       winRate: result.metrics.winRate / 100,
       profitFactor: result.metrics.profitFactor,
@@ -118,7 +128,7 @@ async function main() {
     vixBuckets: [], // dual-momentum では概念が薄いので empty
     verdict,
     equityCurve: result.equityCurve,
-    closedSpreads: spreads,
+    trades,
   };
 
   // ── 出力 ──
@@ -135,7 +145,7 @@ async function main() {
   console.log("\n" + "=".repeat(60));
   console.log("Verdict");
   console.log("=".repeat(60));
-  console.log(`Total closed positions: ${spreads.length}`);
+  console.log(`Total closed positions: ${trades.length}`);
   console.log(`Win rate: ${result.metrics.winRate.toFixed(1)}%`);
   console.log(`CAGR: ${(cagr * 100).toFixed(1)}%`);
   console.log(`Max DD: ${result.metrics.maxDrawdown.toFixed(1)}%`);
