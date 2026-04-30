@@ -33,6 +33,15 @@ export interface MarketPrice {
   last: number | null;
 }
 
+export interface OptionContract {
+  strike: number;
+  bid: number | null;
+  ask: number | null;
+  delta: number | null;
+  gamma: number | null;
+  impliedVol: number | null;
+}
+
 export class IBKRClient {
   private api: IBApiNext;
   private config: Required<IBKRClientConfig>;
@@ -189,6 +198,99 @@ export class IBKRClient {
     const { last } = await this.fetchMarketData(contract);
     if (last == null) throw new Error("VIX last price unavailable");
     return last;
+  }
+
+  /**
+   * SPY オプションの指定 expiry / right の選択 strike を取得。
+   * Phase B では smoke test として ATM ±20 strike を返す（最大 41 件）。
+   *
+   * @param underlying 例: "SPY"
+   * @param expiry YYYYMMDD 形式（例: "20260619"）
+   * @param right "P" or "C"
+   * @param atmStrike ATM strike（リクエストする中心、これの ±20 を取得）
+   */
+  async getOptionChain(
+    underlying: string,
+    expiry: string,
+    right: "P" | "C",
+    atmStrike: number,
+  ): Promise<OptionContract[]> {
+    if (!this.connected) throw new Error("Not connected");
+
+    const strikes: number[] = [];
+    for (let s = atmStrike - 20; s <= atmStrike + 20; s++) {
+      strikes.push(s);
+    }
+
+    const results: OptionContract[] = [];
+    for (const strike of strikes) {
+      try {
+        const data = await this.fetchOptionTick(
+          underlying,
+          expiry,
+          right,
+          strike,
+        );
+        results.push(data);
+      } catch {
+        // skip individual failures
+      }
+    }
+    return results;
+  }
+
+  private async fetchOptionTick(
+    underlying: string,
+    expiry: string,
+    right: "P" | "C",
+    strike: number,
+  ): Promise<OptionContract> {
+    const contract = {
+      symbol: underlying,
+      secType: "OPT" as const,
+      exchange: "SMART",
+      currency: "USD",
+      lastTradeDateOrContractMonth: expiry,
+      strike,
+      right,
+      multiplier: "100",
+    };
+
+    return new Promise<OptionContract>((resolve) => {
+      const result: OptionContract = {
+        strike,
+        bid: null,
+        ask: null,
+        delta: null,
+        gamma: null,
+        impliedVol: null,
+      };
+      // genericTickList "13" = Model Option Computation (Greeks)
+      const sub = this.api
+        .getMarketData(contract as any, "13", false, false)
+        .subscribe({
+          next: (update) => {
+            for (const [tickType, tick] of update.all) {
+              if (tickType === 1) result.bid = tick.value ?? null;
+              else if (tickType === 2) result.ask = tick.value ?? null;
+              else if (tickType === 13) {
+                const t = tick as any;
+                result.delta = t.delta ?? null;
+                result.gamma = t.gamma ?? null;
+                result.impliedVol = t.impliedVol ?? null;
+              }
+            }
+          },
+          error: () => {
+            sub.unsubscribe();
+            resolve(result);
+          },
+        });
+      setTimeout(() => {
+        sub.unsubscribe();
+        resolve(result);
+      }, 3_000); // 3 seconds per strike
+    });
   }
 
   /** 内部ヘルパー: reqMktData で snapshot 取得 */
