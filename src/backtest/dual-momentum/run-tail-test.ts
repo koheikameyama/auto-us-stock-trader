@@ -12,7 +12,7 @@ import { evaluateThresholds } from "../framework/tail-test/pass-fail";
 import { generateMarkdownReport } from "../framework/tail-test/report";
 import { STRESS_WINDOWS } from "../framework/tail-test/stress-windows";
 import type { TailTestResult } from "../framework/tail-test/types";
-import type { Trade } from "../framework/strategy-result";
+import type { Trade, StrategyResult } from "../framework/strategy-result";
 import { DUAL_MOMENTUM_THRESHOLDS } from "./tail-test-thresholds";
 
 async function main() {
@@ -68,19 +68,35 @@ async function main() {
       category: "rotation_exit",
     }));
 
-  // ── tail-test 共通処理 ──
-  const ddPeriods = extractDDPeriods(result.equityCurve, 5);
-  const taggedDDs = tagDDsWithEvents(ddPeriods, STRESS_WINDOWS);
-  const stressAnalyses = STRESS_WINDOWS.map((w) =>
-    analyzeWindow(w, result.equityCurve, trades),
-  );
-  const tailMetrics = calculateTailMetrics(trades, result.equityCurve);
-
+  // ── StrategyResult 構築（framework が消費する標準形） ──
   const initial = config.initialBudget;
   const finalEq =
     result.equityCurve[result.equityCurve.length - 1]?.totalEquity ?? initial;
   const years = result.equityCurve.length / 252;
   const cagr = years > 0 ? Math.pow(finalEq / initial, 1 / years) - 1 : 0;
+
+  const strategyResult: StrategyResult = {
+    strategyName: "dual-momentum",
+    config: { ...config },
+    period: { start: startDate, end: endDate },
+    initialBudget: initial,
+    equityCurve: result.equityCurve,
+    trades,
+    metrics: {
+      winRate: result.metrics.winRate / 100,
+      profitFactor: result.metrics.profitFactor,
+      maxDrawdown: result.metrics.maxDrawdown / 100,
+      netReturnPct: result.metrics.netReturnPct / 100,
+    },
+  };
+
+  // ── tail-test 共通処理 ──
+  const ddPeriods = extractDDPeriods(strategyResult.equityCurve, 5);
+  const taggedDDs = tagDDsWithEvents(ddPeriods, STRESS_WINDOWS);
+  const stressAnalyses = STRESS_WINDOWS.map((w) =>
+    analyzeWindow(w, strategyResult.equityCurve, strategyResult.trades),
+  );
+  const tailMetrics = calculateTailMetrics(strategyResult.trades, strategyResult.equityCurve);
 
   const available = stressAnalyses.filter((w) => w.dataAvailable);
   const worstWindowDD =
@@ -91,10 +107,10 @@ async function main() {
       : Math.min(...available.map((w) => w.pnlPct));
 
   const verdict = evaluateThresholds({
-    winRate: result.metrics.winRate / 100,
-    profitFactor: result.metrics.profitFactor,
+    winRate: strategyResult.metrics.winRate,
+    profitFactor: strategyResult.metrics.profitFactor,
     cagr,
-    maxDrawdown: result.metrics.maxDrawdown / 100,
+    maxDrawdown: strategyResult.metrics.maxDrawdown,
     cvar5: tailMetrics.cvar5,
     worstWindowDD,
     worstWindowPnlPct,
@@ -114,23 +130,23 @@ async function main() {
       rebalanceDays: config.rebalanceDays,
       initialBudget: config.initialBudget,
     },
-    startDate,
-    endDate,
-    totalTrades: trades.length,
+    startDate: strategyResult.period.start,
+    endDate: strategyResult.period.end,
+    totalTrades: strategyResult.trades.length,
     baseMetrics: {
-      winRate: result.metrics.winRate / 100,
-      profitFactor: result.metrics.profitFactor,
+      winRate: strategyResult.metrics.winRate,
+      profitFactor: strategyResult.metrics.profitFactor,
       cagr,
-      maxDrawdown: result.metrics.maxDrawdown / 100,
-      netReturnPct: result.metrics.netReturnPct / 100,
+      maxDrawdown: strategyResult.metrics.maxDrawdown,
+      netReturnPct: strategyResult.metrics.netReturnPct,
     },
     ddRanking: taggedDDs,
     stressWindows: stressAnalyses,
     tailMetrics,
     vixBuckets: [], // dual-momentum では概念が薄いので empty
     verdict,
-    equityCurve: result.equityCurve,
-    trades,
+    equityCurve: strategyResult.equityCurve,
+    trades: strategyResult.trades,
   };
 
   // ── 出力 ──
@@ -147,10 +163,10 @@ async function main() {
   console.log("\n" + "=".repeat(60));
   console.log("Verdict");
   console.log("=".repeat(60));
-  console.log(`Total closed positions: ${trades.length}`);
-  console.log(`Win rate: ${result.metrics.winRate.toFixed(1)}%`);
+  console.log(`Total closed positions: ${strategyResult.trades.length}`);
+  console.log(`Win rate: ${(strategyResult.metrics.winRate * 100).toFixed(1)}%`);
   console.log(`CAGR: ${(cagr * 100).toFixed(1)}%`);
-  console.log(`Max DD: ${result.metrics.maxDrawdown.toFixed(1)}%`);
+  console.log(`Max DD: ${(strategyResult.metrics.maxDrawdown * 100).toFixed(1)}%`);
   for (const c of verdict.checks) {
     const status =
       c.pass === true ? "[PASS]" : c.pass === false ? "[FAIL]" : "[skip]";

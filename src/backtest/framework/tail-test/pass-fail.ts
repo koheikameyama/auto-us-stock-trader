@@ -18,7 +18,7 @@ export interface ThresholdInputs {
   cvar5: number | null;
   worstWindowDD: number | null;       // 全 window 中の最大 DD
   worstWindowPnlPct: number | null;   // 全 window 中の最悪 PnL%
-  maxLossDollar: number;              // 1 spread の最大損失（spread width × 100 × contracts）
+  maxLossDollar: number;              // 1 trade の最大損失（戦略により定義: credit-spread は spreadWidth×100×contracts、dual-momentum は initialBudget 等）
   thresholds: DefaultThresholds;
 }
 
