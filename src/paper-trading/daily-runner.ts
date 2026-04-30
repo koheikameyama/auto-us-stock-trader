@@ -19,6 +19,11 @@ import { US_CREDIT_SPREAD_DEFAULTS } from "../backtest/us/us-credit-spread-confi
 import type { SimulatedSpread } from "../backtest/us/us-credit-spread-types";
 import { fetchIndexFromDB } from "../backtest/data-fetcher";
 import { placeNewSpreadOrder, closeSpreadOrder, expirePosition } from "./order-manager";
+import {
+  sendSlack,
+  formatEntrySuccess, formatEntrySkip, formatCloseSuccess, formatExpire,
+  formatDDStop, formatDailySummary, formatErrorAlert, formatKillSwitch, formatDuplicateOrder,
+} from "./slack-notifier";
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
@@ -31,6 +36,7 @@ async function main() {
   if (isKillSwitchActive()) {
     const info = getKillSwitchInfo();
     console.log(`⏸ Kill switch active: ${info.reason} (since ${info.createdAt?.toISOString()})`);
+    await sendSlack({ text: formatKillSwitch(info.reason ?? "(no reason)"), level: "warn" });
     process.exit(0);
   }
 
@@ -53,6 +59,10 @@ async function main() {
     for (const m of mismatches) {
       console.error(`  ${m.type}: ${m.symbol} ${m.shortStrike}/${m.longStrike} ${m.expiry}`);
     }
+    await sendSlack({
+      text: `Position mismatch: ${mismatches.length} differences (${mismatches.map((m) => m.type).join(", ")})`,
+      level: "warn",
+    });
   }
 
   // ── 4. live data 取得 (SPY / VIX) ──
@@ -119,10 +129,28 @@ async function main() {
             currentSpreadValue: action.currentValue,
           });
           console.log(`  Closed ibkrOrderId=${closed.ibkrOrderId}, status=${closed.status}`);
+          if (closed.status === "FILLED") {
+            const daysHeld = Math.floor((Date.now() - dbPos.entryDate.getTime()) / 86400000);
+            const updated = await prisma.position.findUnique({ where: { id: dbPos.id } });
+            await sendSlack({
+              text: formatCloseSuccess({
+                shortStrike: dbPos.shortStrike,
+                longStrike: dbPos.longStrike,
+                reason: action.reason,
+                netPnl: updated?.netPnl ?? null,
+                daysHeld,
+              }),
+              level: "info",
+            });
+          }
         } catch (e: any) {
           console.error(`  ❌ Close failed: ${e.message}`);
           await prisma.errorLog.create({
             data: { category: "CLOSE_FAILED", message: e.message, context: { positionId: dbPos.id, reason: action.reason } },
+          });
+          await sendSlack({
+            text: formatErrorAlert("CLOSE_FAILED", e.message),
+            level: "error",
           });
         }
       }
@@ -133,6 +161,16 @@ async function main() {
         finalValue: action.finalValue,
       });
       console.log(`  Expired: reason=${action.reason}, value=${action.finalValue}`);
+      const updated = await prisma.position.findUnique({ where: { id: dbPos.id } });
+      await sendSlack({
+        text: formatExpire({
+          shortStrike: dbPos.shortStrike,
+          longStrike: dbPos.longStrike,
+          reason: action.reason,
+          netPnl: updated?.netPnl ?? null,
+        }),
+        level: "info",
+      });
     }
 
     await prisma.signalLog.create({
@@ -170,6 +208,12 @@ async function main() {
     config: US_CREDIT_SPREAD_DEFAULTS,
   });
   console.log(`DD stop: active=${ddState.ddStopActive} (transition=${ddState.transition}), peak=$${ddState.runningPeak.toLocaleString()}`);
+  if (ddState.transition !== "UNCHANGED") {
+    await sendSlack({
+      text: formatDDStop(ddState.transition, ddState.runningPeak, totalEquity),
+      level: "warn",
+    });
+  }
 
   // ── 7. 新規エントリー判定 ──
   // SMA50 計算: DB の ^GSPC 過去 50 日 close から
@@ -226,6 +270,13 @@ async function main() {
     },
   });
 
+  if (signal.reason !== "ENTERED") {
+    await sendSlack({
+      text: formatEntrySkip(signal.reason, { spy: spotSpy, vix, sma50 }),
+      level: "info",
+    });
+  }
+
   if (signal.reason === "ENTERED") {
     console.log(`Placing order: SPY ${signal.expirationDate} P ${signal.shortStrike}/${signal.longStrike}, credit ~$${signal.estimatedCredit.toFixed(2)}`);
     const expiryYYYYMMDD = signal.expirationDate.replace(/-/g, "");
@@ -244,6 +295,17 @@ async function main() {
         { dryRun: DRY_RUN },
       );
       console.log(`  Order: ibkrOrderId=${placed.ibkrOrderId}, status=${placed.status}, filledCredit=${placed.filledCredit ?? "-"}`);
+      if (placed.status === "FILLED") {
+        await sendSlack({
+          text: formatEntrySuccess({
+            shortStrike: signal.shortStrike,
+            longStrike: signal.longStrike,
+            expiry: signal.expirationDate,
+            filledCredit: placed.filledCredit,
+          }),
+          level: "info",
+        });
+      }
     } catch (e: any) {
       console.error(`  ❌ Order failed: ${e.message}`);
       await prisma.errorLog.create({
@@ -252,6 +314,11 @@ async function main() {
           message: e.message,
           context: { signal: { reason: signal.reason } },
         },
+      });
+      const isDuplicate = /Duplicate/i.test(e.message);
+      await sendSlack({
+        text: isDuplicate ? formatDuplicateOrder(e.message) : formatErrorAlert("ORDER_FAILED", e.message),
+        level: isDuplicate ? "critical" : "error",
       });
     }
   }
@@ -280,6 +347,16 @@ async function main() {
     },
   });
   console.log(`DailyEquitySnapshot saved for ${today}`);
+
+  const yesterday = await prisma.dailyEquitySnapshot.findFirst({
+    where: { date: { lt: new Date(today) } },
+    orderBy: { date: "desc" },
+  });
+  const dailyPnl = yesterday ? totalEquity - yesterday.totalEquity : 0;
+  await sendSlack({
+    text: formatDailySummary({ date: today, openCount: dbOpenSpreads.length, equity: totalEquity, dailyPnl }),
+    level: "info",
+  });
 
   await ibkr.disconnect();
   await prisma.$disconnect();
