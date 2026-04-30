@@ -6,9 +6,10 @@
 
 | フェーズ | 状態 | 内容 |
 |---|---|---|
-| **データ層** | ✅ 稼働中 | yfinance から OHLCV / 決算日 / 指数 / ETF を収集、PostgreSQL に保存 |
-| **バックテスト層** | 🚧 [auto-stock-trader リポ](../auto-stock-trader/src/backtest/us/)に暫定配置中 | 8戦略検証済み（Phase 1: GapUp/Momentum/PEAD/MeanRev/Wheel + Phase 2: SPY Credit Spread / VIX Contango / Dual Momentum）。本リポへの移管は本番取引着手時に実施 |
-| **取引層** | 📋 未着手 | IBKR / Webull API クライアント、注文執行、ポジション管理 |
+| **データ層** | ✅ 稼働中 | yfinance から OHLCV / 決算日 / 指数 / ETF を収集、PostgreSQL `auto_us_stock_trader` schema に保存 |
+| **バックテスト層** | ✅ 本リポに移管済 | 8 戦略移管完了。SPY Credit Spread は tail-test で **6/7 PASS**（Max DD 21.6%、CVaR -$216、CAGR 8.83%）|
+| **Paper Trading 層** | 🚧 構築中 | Phase A 信号ロジック純関数化 ✅、Phase B IBKR TWS API 接続 ✅、Phase C 発注は次フェーズ |
+| **本番取引層** | 📋 未着手 | Paper trading 90 日観察 PASS 後に IBKR live で段階的にサイズアップ |
 
 ## アーキテクチャ方針
 
@@ -130,11 +131,32 @@ us schema 構築後にデータ移行 + backfill スクリプトの書き込み�
 
 ## ロードマップ
 
-1. ✅ 米国データ収集を別リポに分離（2026-04-27）
-2. 📋 SPY Credit Spread のテール耐性検証（2018 Volmageddon, 2020 COVID 期間）
-3. 📋 IBKR or Webull API クライアント実装（paper trading）
-4. 📋 本リポへバックテストコード移管
-5. 📋 本番取引開始（少額 → スケールアップ）
+| # | 項目 | 状態 | Linear |
+|---|---|---|---|
+| 1 | 米国データ収集を別リポに分離（2026-04-27） | ✅ 完了 | - |
+| 2 | `auto_us_stock_trader` schema 構築 + データ移行 | ✅ 完了 | KOH-446 |
+| 3 | バックテストコード本リポへ移管 | ✅ 完了 | KOH-447 |
+| 4 | 2007〜長期データ backfill (^GSPC / ^VIX) | ✅ 完了 | KOH-448 |
+| 5 | SPY Credit Spread tail-test 実装 | ✅ 完了 | KOH-449 |
+| 6 | 戦略リファクタ #1（DD hard stop）| ✅ 完了（4/7 PASS）| KOH-450 |
+| 7 | 戦略の根本見直し（個別 SL 導入）| ✅ 完了（**6/7 PASS**） | KOH-451 |
+| 8 | 信号ロジック純関数化 (Phase A) | ✅ 完了 | KOH-452 |
+| 9 | IBKR TWS API 接続 リードオンリー (Phase B) | ✅ 完了 | KOH-453 |
+| **10** | **発注 + 状態管理 (Phase C)** | 📋 **次** | KOH-454 (予定) |
+| 11 | ロギング + 通知 + 週次レポート (Phase D) | 📋 | KOH-455 |
+| 12 | エラー処理 + kill switch + テスト (Phase E) | 📋 | KOH-456 |
+| 13 | 90 日 paper trading 観察 (Phase F) | 📋 | KOH-457 |
+| 14 | 最終評価 + 本番判断 (Phase G) | 📋 | KOH-458 |
+| 15 | 本番取引開始（live、段階サイズアップ） | 📋 | KOH-459 |
+
+並行検討候補（保留中）:
+- 他 7 戦略（pead/gapup/momentum/mean-reversion/wheel/vix-contango/dual-momentum）の tail-test 横展開
+- Iron Condor 化（Credit Spread の CAGR 未達への代替策）
+- 監視ダッシュボード（実取引開始後）
+
+詳細設計:
+- [docs/plans/2026-04-30-paper-trading-design.md](docs/plans/2026-04-30-paper-trading-design.md)（Paper Trading 全体設計）
+- [docs/plans/2026-04-30-credit-spread-tail-improvement-design.md](docs/plans/2026-04-30-credit-spread-tail-improvement-design.md)（戦略改善履歴）
 
 ## 注意事項
 

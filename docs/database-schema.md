@@ -361,13 +361,4 @@ psql "$RAILWAY_URL" < migrate_us_data.sql
 - **GitHub Actions の Secrets**
   - `DATABASE_URL`: Railway URL を設定。Prisma が自動で auto_us_stock_trader schema を使う
 
-## ロードマップ上の位置付け
-
-| ロードマップ項目 | 本ドキュメントの関与 |
-|---|---|
-| 1. ✅ 米国データ収集を別リポに分離 | 完了 |
-| **2. 📋 auto_us_stock_trader schema 構築 + データ移行** | **本ドキュメント** |
-| 3. 📋 SPY Credit Spread のテール耐性検証 | データ整備後 |
-| 4. 📋 IBKR / Webull API クライアント実装 | 取引テーブル追加 |
-| 5. 📋 バックテストコード本リポへ移管 | auto_us_stock_trader schema 確立後 |
-| 6. 📋 本番取引開始 | 全段階完了後 |
+ロードマップは [README.md](../README.md#ロードマップ) に集約。
