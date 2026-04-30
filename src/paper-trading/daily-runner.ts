@@ -232,7 +232,30 @@ async function main() {
     }
   }
 
-  // TODO: ステップ 8 (DailyEquitySnapshot) を次タスクで追加
+  // ── 8. DailyEquitySnapshot を保存 ──
+  await prisma.dailyEquitySnapshot.upsert({
+    where: { date: new Date(today) },
+    create: {
+      date: new Date(today),
+      cash: netLiq,
+      positionsValue,
+      totalEquity,
+      openPositionCount: dbOpenSpreads.length,
+      ddStopActive: ddState.ddStopActive,
+      runningPeak: ddState.runningPeak,
+      ddStopActivatedDate: ddState.ddStopActivatedDate ? new Date(ddState.ddStopActivatedDate) : null,
+    },
+    update: {
+      cash: netLiq,
+      positionsValue,
+      totalEquity,
+      openPositionCount: dbOpenSpreads.length,
+      ddStopActive: ddState.ddStopActive,
+      runningPeak: ddState.runningPeak,
+      ddStopActivatedDate: ddState.ddStopActivatedDate ? new Date(ddState.ddStopActivatedDate) : null,
+    },
+  });
+  console.log(`DailyEquitySnapshot saved for ${today}`);
 
   await ibkr.disconnect();
   await prisma.$disconnect();
