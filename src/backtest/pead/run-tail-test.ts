@@ -53,16 +53,8 @@ async function main() {
   console.log("\nLoading data...");
   const tickers = await getUSTickerCodes();
 
-  // Prisma napi の string size limit を回避するため ticker をチャンクで取得
-  const TICKER_CHUNK = 200;
-  const allData = new Map<string, Awaited<ReturnType<typeof fetchUSHistoricalFromDB>> extends Map<string, infer V> ? V : never>();
-  for (let i = 0; i < tickers.length; i += TICKER_CHUNK) {
-    const chunk = tickers.slice(i, i + TICKER_CHUNK);
-    const partial = await fetchUSHistoricalFromDB(chunk, startDate, endDate);
-    for (const [k, v] of partial) allData.set(k, v);
-  }
-
-  const [vixData, indexData, earningsData] = await Promise.all([
+  const [allData, vixData, indexData, earningsData] = await Promise.all([
+    fetchUSHistoricalFromDB(tickers, startDate, endDate),
     fetchVixFromDB(startDate, endDate),
     fetchSP500FromDB(startDate, endDate),
     fetchUSEarningsFromDB(tickers, startDate, endDate),
