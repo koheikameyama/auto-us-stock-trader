@@ -1,5 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { evaluateThresholds, DEFAULT_THRESHOLDS } from "../pass-fail";
+import { evaluateThresholds } from "../pass-fail";
+import type { DefaultThresholds } from "../pass-fail";
+
+const TEST_THRESHOLDS: DefaultThresholds = {
+  winRateMin: 0.70,
+  profitFactorMin: 1.30,
+  cagrMin: 0.10,
+  maxDrawdownMax: 0.25,
+  cvar5MinRatio: 0.5,
+  worstWindowDDMax: 0.30,
+  worstWindowPnlPctMin: -0.50,
+};
 
 describe("evaluateThresholds", () => {
   it("PASS when all metrics meet thresholds", () => {
@@ -12,7 +23,7 @@ describe("evaluateThresholds", () => {
       worstWindowDD: 0.25,
       worstWindowPnlPct: -0.30,
       maxLossDollar: 500,
-      thresholds: DEFAULT_THRESHOLDS,
+      thresholds: TEST_THRESHOLDS,
     });
     expect(verdict.overallPass).toBe(true);
     expect(verdict.checks.every((c) => c.pass !== false)).toBe(true);
@@ -28,7 +39,7 @@ describe("evaluateThresholds", () => {
       worstWindowDD: 0.25,
       worstWindowPnlPct: -0.30,
       maxLossDollar: 500,
-      thresholds: DEFAULT_THRESHOLDS,
+      thresholds: TEST_THRESHOLDS,
     });
     expect(verdict.overallPass).toBe(false);
     const winRateCheck = verdict.checks.find((c) => c.name === "Win Rate");
@@ -45,7 +56,7 @@ describe("evaluateThresholds", () => {
       worstWindowDD: null,
       worstWindowPnlPct: null,
       maxLossDollar: 500,
-      thresholds: DEFAULT_THRESHOLDS,
+      thresholds: TEST_THRESHOLDS,
     });
     const tailDDCheck = verdict.checks.find((c) => c.name.includes("テール期間 DD"));
     expect(tailDDCheck?.pass).toBeNull();
@@ -63,7 +74,7 @@ describe("evaluateThresholds", () => {
       worstWindowPnlPct: -0.30,
       maxLossDollar: 500,
       thresholds: {
-        ...DEFAULT_THRESHOLDS,
+        ...TEST_THRESHOLDS,
         winRateMin: null,    // skipped
         cvar5MinRatio: null, // skipped
       },

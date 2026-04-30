@@ -9,11 +9,12 @@ import type { USCreditSpreadBacktestConfig } from "../us/us-credit-spread-types"
 import { extractDDPeriods } from "../framework/tail-test/dd-extractor";
 import { analyzeWindow, tagDDsWithEvents } from "../framework/tail-test/window-analyzer";
 import { calculateTailMetrics, calculateVixBuckets } from "../framework/tail-test/tail-metrics";
-import { evaluateThresholds, DEFAULT_THRESHOLDS } from "../framework/tail-test/pass-fail";
+import { evaluateThresholds } from "../framework/tail-test/pass-fail";
 import { generateMarkdownReport } from "../framework/tail-test/report";
 import { STRESS_WINDOWS } from "../framework/tail-test/stress-windows";
 import type { TailTestResult } from "../framework/tail-test/types";
 import type { Trade } from "../framework/strategy-result";
+import { CREDIT_SPREAD_THRESHOLDS } from "../credit-spread/tail-test-thresholds";
 
 async function main() {
   const args = process.argv.slice(2);
@@ -87,7 +88,7 @@ async function main() {
     worstWindowDD,
     worstWindowPnlPct,
     maxLossDollar: config.spreadWidth * 100 * config.contractsPerSpread,
-    thresholds: DEFAULT_THRESHOLDS,
+    thresholds: CREDIT_SPREAD_THRESHOLDS,
   });
 
   const tailResult: TailTestResult = {

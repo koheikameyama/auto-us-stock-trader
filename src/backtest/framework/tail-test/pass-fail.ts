@@ -10,16 +10,6 @@ export interface DefaultThresholds {
   worstWindowPnlPctMin: number | null;
 }
 
-export const DEFAULT_THRESHOLDS: DefaultThresholds = {
-  winRateMin: 0.70,
-  profitFactorMin: 1.30,
-  cagrMin: 0.10,
-  maxDrawdownMax: 0.25,
-  cvar5MinRatio: 0.5,
-  worstWindowDDMax: 0.30,
-  worstWindowPnlPctMin: -0.50,
-};
-
 export interface ThresholdInputs {
   winRate: number;
   profitFactor: number;
