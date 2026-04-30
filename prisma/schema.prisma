@@ -67,3 +67,96 @@ model Stock {
   @@index([tickerCode])
   @@schema("auto_us_stock_trader")
 }
+
+model TradingOrder {
+  id              String   @id @default(cuid())
+  ibkrOrderId     Int      @unique
+  symbol          String
+  orderType       String   // "ENTRY" | "EXIT"
+  shortStrike     Float
+  longStrike      Float
+  expiry          DateTime @db.Date
+  quantity        Int
+  limitPrice      Float    // negative = credit (NET_CREDIT)
+  status          String   // "SUBMITTED" | "FILLED" | "CANCELLED" | "REJECTED" | "TIMEOUT"
+  submittedAt     DateTime
+  filledAt        DateTime?
+  filledPrice     Float?
+  commission      Float?
+  createdAt       DateTime @default(now())
+
+  position        Position? @relation(fields: [positionId], references: [id])
+  positionId      String?
+
+  @@unique([symbol, shortStrike, longStrike, expiry, submittedAt])
+  @@index([status])
+  @@index([submittedAt])
+  @@schema("auto_us_stock_trader")
+}
+
+model Position {
+  id              String   @id @default(cuid())
+  symbol          String
+  shortStrike     Float
+  longStrike      Float
+  expiry          DateTime @db.Date
+  contracts       Int
+  creditReceived  Float
+  entryDate       DateTime
+  state           String   // "OPEN" | "CLOSED"
+  closeDate       DateTime?
+  closeReason     String?
+  closeSpreadPrice Float?
+  netPnl          Float?
+  totalCommission Float?
+
+  orders          TradingOrder[]
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([state])
+  @@index([entryDate])
+  @@schema("auto_us_stock_trader")
+}
+
+model DailyEquitySnapshot {
+  id                  String   @id @default(cuid())
+  date                DateTime @db.Date  @unique
+  cash                Float
+  positionsValue      Float
+  totalEquity         Float
+  openPositionCount   Int
+  ddStopActive        Boolean
+  runningPeak         Float
+  ddStopActivatedDate DateTime? @db.Date
+  createdAt           DateTime @default(now())
+
+  @@index([date])
+  @@schema("auto_us_stock_trader")
+}
+
+model SignalLog {
+  id              String   @id @default(cuid())
+  date            DateTime @db.Date
+  signalType      String   // "ENTRY" | "CLOSE"
+  reason          String
+  details         Json?
+  createdAt       DateTime @default(now())
+
+  @@index([date])
+  @@index([signalType])
+  @@schema("auto_us_stock_trader")
+}
+
+model ErrorLog {
+  id              String   @id @default(cuid())
+  occurredAt      DateTime @default(now())
+  category        String   // "IBKR_CONNECTION" | "ORDER_FAILED" | "DB" | "UNHANDLED"
+  message         String
+  context         Json?
+  resolved        Boolean  @default(false)
+
+  @@index([occurredAt])
+  @@index([category])
+  @@schema("auto_us_stock_trader")
+}
