@@ -11,7 +11,6 @@ import { calculateTailMetrics } from "../framework/tail-test/tail-metrics";
 import { evaluateThresholds } from "../framework/tail-test/pass-fail";
 import { generateMarkdownReport } from "../framework/tail-test/report";
 import { STRESS_WINDOWS } from "../framework/tail-test/stress-windows";
-import { rotationPositionsToSpreads } from "../tail-test/dual-momentum-adapter";
 import type { TailTestResult } from "../framework/tail-test/types";
 import type { Trade } from "../framework/strategy-result";
 import { DUAL_MOMENTUM_THRESHOLDS } from "./tail-test-thresholds";
@@ -54,17 +53,20 @@ async function main() {
   console.log("\nRunning simulation...");
   const result = runUSDualMomentumBacktest(config, etfMap);
 
-  // ── Adapter: rotation positions -> SimulatedSpread 互換 → Trade 変換 ──
-  const adaptedSpreads = rotationPositionsToSpreads(result.positions);
-  const trades: Trade[] = adaptedSpreads.map((s) => ({
-    symbol: s.underlyingSymbol,
-    entryDate: s.entryDate,
-    closeDate: s.closeDate ?? null,
-    netPnl: s.netPnl ?? null,
-    pnlPct: null,
-    holdingDays: null,
-    category: s.closeReason,
-  }));
+  // ── rotation positions → Trade 直接変換（adapter 不要） ──
+  const trades: Trade[] = result.positions
+    .filter(
+      (p) => p.exitReason === "rotation_exit" && p.exitDate != null && p.netPnl != null,
+    )
+    .map((p) => ({
+      symbol: p.ticker,
+      entryDate: p.entryDate,
+      closeDate: p.exitDate ?? null,
+      netPnl: p.netPnl ?? null,
+      pnlPct: p.pnlPct ?? null,
+      holdingDays: p.holdingDays ?? null,
+      category: "rotation_exit",
+    }));
 
   // ── tail-test 共通処理 ──
   const ddPeriods = extractDDPeriods(result.equityCurve, 5);
