@@ -2,7 +2,7 @@ import type { TailTestResult } from "./types";
 
 export function generateMarkdownReport(
   result: TailTestResult,
-  strategyName: string = "SPY Credit Spread",
+  strategyName: string = "Strategy",
 ): string {
   const m = result.baseMetrics;
   const v = result.verdict;

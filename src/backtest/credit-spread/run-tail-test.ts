@@ -143,7 +143,7 @@ async function main() {
   fs.mkdirSync(outDir, { recursive: true });
   const today = dayjs().format("YYYY-MM-DD");
   const reportPath = path.join(outDir, `credit-spread-tail-${today}${suffix}.md`);
-  fs.writeFileSync(reportPath, generateMarkdownReport(tailResult), "utf-8");
+  fs.writeFileSync(reportPath, generateMarkdownReport(tailResult, "SPY Credit Spread"), "utf-8");
 
   // CSV
   fs.writeFileSync(
