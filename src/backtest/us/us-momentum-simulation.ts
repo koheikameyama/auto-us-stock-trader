@@ -22,6 +22,10 @@ import {
   type USPrecomputedSimData,
 } from "./us-simulation-helpers";
 import { US_MOMENTUM_RISK_PER_TRADE_PCT } from "./us-momentum-config";
+import { calculateMomentumReturn } from "../momentum/momentum-return-calculator";
+import { rankSignalsByReturn } from "../momentum/signal-ranker";
+import { calculateMomentumStopLoss } from "../momentum/stop-loss-calculator";
+import { adjustMomentumQuantityForRegime } from "../momentum/quantity-adjuster";
 import type {
   USMomentumBacktestConfig,
   USMomentumBacktestResult,
@@ -97,7 +101,8 @@ export function precomputeUSMomentumDailySignals(
       if (!lookbackBar || lookbackBar.close <= 0) continue;
 
       // リターン計算
-      const returnPct = ((todayBar.close - lookbackBar.close) / lookbackBar.close) * 100;
+      const returnPct = calculateMomentumReturn(todayBar.close, lookbackBar.close);
+      if (returnPct == null) continue;
       if (returnPct < config.minReturnPct) continue;
 
       // テクニカル指標計算
@@ -136,8 +141,7 @@ export function precomputeUSMomentumDailySignals(
 
     if (daySignals.length > 0) {
       // リターン降順ソート → topN
-      daySignals.sort((a, b) => b.returnPct - a.returnPct);
-      const topSignals = daySignals.slice(0, config.topN);
+      const topSignals = rankSignalsByReturn(daySignals, config.topN);
       result.set(today, topSignals);
     }
   }
@@ -324,10 +328,13 @@ export function runUSMomentumBacktest(
         if (lastExit != null && dayIdx - lastExit < config.cooldownDays) continue;
 
         // SL計算
-        const rawSL = signal.entryPrice - signal.atr14 * config.atrMultiplier;
-        const maxSL = signal.entryPrice * (1 - config.maxLossPct);
-        const stopLossPrice = Math.max(rawSL, maxSL);
-        if (stopLossPrice >= signal.entryPrice) continue;
+        const stopLossPrice = calculateMomentumStopLoss({
+          entryPrice: signal.entryPrice,
+          atr14: signal.atr14,
+          atrMultiplier: config.atrMultiplier,
+          maxLossPct: config.maxLossPct,
+        });
+        if (stopLossPrice == null) continue;
 
         // TP（実質無効、TSに委ねる）
         const takeProfitPrice = signal.entryPrice + signal.atr14 * 5;
@@ -343,9 +350,7 @@ export function runUSMomentumBacktest(
         if (quantity <= 0) continue;
 
         // VIX elevated: サイズ半減
-        const finalQuantity = todayRegime === "elevated"
-          ? Math.max(1, Math.floor(quantity / 2))
-          : quantity;
+        const finalQuantity = adjustMomentumQuantityForRegime(quantity, todayRegime);
 
         const tradeValue = signal.entryPrice * finalQuantity;
         const entryCost = config.costModelEnabled ? calculateUSTransactionCosts(tradeValue, false) : 0;
