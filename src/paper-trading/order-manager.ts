@@ -224,3 +224,24 @@ export async function closeSpreadOrder(
     positionId: position.id,
   };
 }
+
+export async function expirePosition(
+  prisma: PrismaClient,
+  input: { positionId: string; reason: "expired_worthless" | "expired_max_loss" | "expired_partial"; finalValue: number },
+): Promise<void> {
+  const position = await prisma.position.findUnique({ where: { id: input.positionId } });
+  if (!position) throw new Error(`Position not found: ${input.positionId}`);
+  if (position.state !== "OPEN") return; // idempotent
+  const totalCommission = position.totalCommission ?? 0;
+  const netPnl = (position.creditReceived - input.finalValue) * 100 * position.contracts - totalCommission;
+  await prisma.position.update({
+    where: { id: position.id },
+    data: {
+      state: "EXPIRED",
+      closeDate: new Date(),
+      closeReason: input.reason,
+      closeSpreadPrice: input.finalValue,
+      netPnl,
+    },
+  });
+}

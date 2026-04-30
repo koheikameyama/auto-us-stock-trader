@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { placeNewSpreadOrder, isDuplicateOrder, closeSpreadOrder } from "../order-manager";
+import { placeNewSpreadOrder, isDuplicateOrder, closeSpreadOrder, expirePosition } from "../order-manager";
 
 const prisma = new PrismaClient();
 
@@ -137,6 +137,33 @@ describe("order-manager", () => {
           positionId: position.id, reason: "profit_target", currentSpreadValue: 0.30,
         }),
       ).rejects.toThrow(/already closed/i);
+    });
+  });
+
+  describe("expirePosition", () => {
+    it("marks Position as EXPIRED with finalValue and netPnl, no IBKR call", async () => {
+      const position = await prisma.position.create({
+        data: {
+          symbol: "SPY",
+          shortStrike: 480,
+          longStrike: 475,
+          expiry: new Date("2026-06-19"),
+          contracts: 1,
+          creditReceived: 0.85,
+          entryDate: new Date("2026-05-01"),
+          state: "OPEN",
+          totalCommission: 1.20,
+        },
+      });
+      await expirePosition(prisma, {
+        positionId: position.id,
+        reason: "expired_worthless",
+        finalValue: 0,
+      });
+      const updated = await prisma.position.findUnique({ where: { id: position.id } });
+      expect(updated?.state).toBe("EXPIRED");
+      expect(updated?.closeReason).toBe("expired_worthless");
+      expect(updated?.netPnl).toBeCloseTo(0.85 * 100 - 1.20, 2); // = 83.80
     });
   });
 });
