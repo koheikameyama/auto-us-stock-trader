@@ -15,7 +15,7 @@ export const US_CREDIT_SPREAD_DEFAULTS: Omit<USCreditSpreadBacktestConfig, "star
   dte: 35,
   profitTarget: 0.50,
   // ストップロス無効（spread の max loss が定義済みなので不要派が多い）
-  stopLossMultiplier: 0,
+  stopLossMultiplier: 2.0,
 
   riskFreeRate: 0.045,
   ivScaleFactor: 1.0,
@@ -34,7 +34,7 @@ export const US_CREDIT_SPREAD_DEFAULTS: Omit<USCreditSpreadBacktestConfig, "star
 
   // DD hard stop（Step #1）
   ddStopEnabled: true,
-  ddStopThreshold: 0.10,
+  ddStopThreshold: 0.15,
   ddStopCooldownDays: 252,
 
   verbose: false,
