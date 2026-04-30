@@ -27,6 +27,12 @@ export interface IBKRPosition {
   unrealizedPnl: number;
 }
 
+export interface MarketPrice {
+  bid: number | null;
+  ask: number | null;
+  last: number | null;
+}
+
 export class IBKRClient {
   private api: IBApiNext;
   private config: Required<IBKRClientConfig>;
@@ -155,6 +161,65 @@ export class IBKRClient {
       setTimeout(() => {
         sub.unsubscribe();
         resolve(positions);
+      }, 5_000);
+    });
+  }
+
+  /** 株式 / ETF のリアルタイム bid/ask/last 取得 */
+  async getMarketPrice(symbol: string): Promise<MarketPrice> {
+    if (!this.connected) throw new Error("Not connected");
+    const contract = {
+      symbol,
+      secType: "STK" as const,
+      exchange: "SMART",
+      currency: "USD",
+    };
+    return this.fetchMarketData(contract);
+  }
+
+  /** VIX (CBOE INDEX) の current value 取得 */
+  async getVIX(): Promise<number> {
+    if (!this.connected) throw new Error("Not connected");
+    const contract = {
+      symbol: "VIX",
+      secType: "IND" as const,
+      exchange: "CBOE",
+      currency: "USD",
+    };
+    const { last } = await this.fetchMarketData(contract);
+    if (last == null) throw new Error("VIX last price unavailable");
+    return last;
+  }
+
+  /** 内部ヘルパー: reqMktData で snapshot 取得 */
+  private async fetchMarketData(contract: any): Promise<MarketPrice> {
+    return new Promise<MarketPrice>((resolve) => {
+      const result: MarketPrice = { bid: null, ask: null, last: null };
+      const sub = this.api.getMarketData(contract, "", false, false).subscribe({
+        next: (update) => {
+          for (const [tickType, tick] of update.all) {
+            if (tickType === 1) result.bid = tick.value ?? null; // BID
+            else if (tickType === 2) result.ask = tick.value ?? null; // ASK
+            else if (tickType === 4) result.last = tick.value ?? null; // LAST
+          }
+          if (
+            result.bid != null &&
+            result.ask != null &&
+            result.last != null
+          ) {
+            sub.unsubscribe();
+            resolve(result);
+          }
+        },
+        error: () => {
+          sub.unsubscribe();
+          resolve(result);
+        },
+      });
+      // 5 秒で打ち切り、取得済みを返す
+      setTimeout(() => {
+        sub.unsubscribe();
+        resolve(result);
       }, 5_000);
     });
   }
