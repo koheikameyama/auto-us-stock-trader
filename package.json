@@ -19,6 +19,7 @@
     "backtest:wheel": "tsx src/backtest/us/us-wheel-run.ts",
     "backtest:credit-spread": "tsx src/backtest/us/us-credit-spread-run.ts",
     "tail-test:credit-spread": "tsx src/backtest/tail-test/run-credit-spread-tail-test.ts",
+    "tail-test:dual-momentum": "tsx src/backtest/dual-momentum/run-tail-test.ts",
     "backtest:vix-contango": "tsx src/backtest/us/us-vix-contango-run.ts",
     "backtest:dual-momentum": "tsx src/backtest/us/us-dual-momentum-run.ts",
     "walk-forward:pead": "tsx scripts/walk-forward/walk-forward-us-pead.ts",
