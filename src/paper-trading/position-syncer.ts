@@ -1,6 +1,7 @@
 // src/paper-trading/position-syncer.ts
 import { PrismaClient } from "@prisma/client";
 import type { IBKRPosition, IBKRClient } from "./ibkr-client";
+import { withRetry } from "./with-retry";
 
 export interface PositionMismatch {
   type: "DB_NOT_IN_IBKR" | "IBKR_NOT_IN_DB";
@@ -28,7 +29,7 @@ export async function reconcilePositions(
   ibkr: IBKRClient,
   prisma: PrismaClient,
 ): Promise<{ mismatches: PositionMismatch[]; ibkrLegs: IBKRPosition[]; dbOpenPositions: number }> {
-  const ibkrPositions = await ibkr.getPositions();
+  const ibkrPositions = await withRetry(() => ibkr.getPositions(), { retries: 3, intervalMs: 5_000 });
   const ibkrLegs = filterActivePutSpreadLegs(ibkrPositions);
 
   const dbOpen = await prisma.position.findMany({ where: { state: "OPEN" } });

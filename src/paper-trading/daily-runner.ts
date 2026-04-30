@@ -12,6 +12,7 @@ import { PrismaClient } from "@prisma/client";
 import { IBKRClient } from "./ibkr-client";
 import { isKillSwitchActive, getKillSwitchInfo } from "./kill-switch";
 import { reconcilePositions } from "./position-syncer";
+import { withRetry } from "./with-retry";
 import { evaluateSpread } from "../backtest/credit-spread/spread-evaluator";
 import { calcDDStopState } from "../backtest/credit-spread/dd-stop";
 import { generateEntrySignal } from "../backtest/credit-spread/signal-generator";
@@ -45,8 +46,8 @@ async function main() {
 
   // ── 2. IBKR 接続 + アカウント情報 ──
   console.log("Connecting to IBKR TWS...");
-  await ibkr.connect();
-  const accountSummary = await ibkr.getAccountSummary();
+  await withRetry(() => ibkr.connect(), { retries: 3, intervalMs: 10_000 });
+  const accountSummary = await withRetry(() => ibkr.getAccountSummary(), { retries: 3, intervalMs: 5_000 });
   console.log(`Account: NetLiq=$${accountSummary.netLiquidation.toLocaleString()}, BP=$${accountSummary.buyingPower.toLocaleString()}`);
 
   // ── 3. 既存ポジション同期 ──
@@ -67,7 +68,7 @@ async function main() {
 
   // ── 4. live data 取得 (SPY / VIX) ──
   console.log("Fetching market data...");
-  const spy = await ibkr.getMarketPrice("SPY");
+  const spy = await withRetry(() => ibkr.getMarketPrice("SPY"), { retries: 3, intervalMs: 5_000 });
   if (spy.last == null) {
     console.error("⚠ SPY price unavailable, skipping today's cycle");
     await ibkr.disconnect();
@@ -76,7 +77,7 @@ async function main() {
   }
   let vix: number;
   try {
-    vix = await ibkr.getVIX();
+    vix = await withRetry(() => ibkr.getVIX(), { retries: 3, intervalMs: 5_000 });
   } catch {
     console.error("⚠ VIX unavailable, skipping today's cycle");
     await ibkr.disconnect();
