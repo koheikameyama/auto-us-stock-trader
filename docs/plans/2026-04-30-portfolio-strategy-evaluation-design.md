@@ -542,3 +542,41 @@ framework 側は触らない。
 - 現状のまま portfolio 補完候補としては推奨度低。パラメータチューニング（gapMinPct/volSurgeRatio 引き上げ等）は Phase 4 後の意思決定に委ねる
 - Phase 2-B (Momentum) と並列で実装、Phase 4 で credit-spread との相関分析予定
 
+### Phase 2-B: Cross-Sectional Momentum (KOH-458, 2026-05-01 完了)
+
+**実装完了内容:**
+- 純関数抽出 (TDD): [momentum-return-calculator.ts](../../src/backtest/momentum/momentum-return-calculator.ts) (lookback リターン), [signal-ranker.ts](../../src/backtest/momentum/signal-ranker.ts) (returnPct 降順 topN), [stop-loss-calculator.ts](../../src/backtest/momentum/stop-loss-calculator.ts) (ATR/maxLoss キャップ), [quantity-adjuster.ts](../../src/backtest/momentum/quantity-adjuster.ts) (VIX elevated 時半減) — 各 5〜6 vitest cases
+- [us-momentum-simulation.ts](../../src/backtest/us/us-momentum-simulation.ts) ラッパー化リファクタ (refactor 前後で 2020-2023 の出力 bit-identical)
+- [MOMENTUM_THRESHOLDS](../../src/backtest/momentum/tail-test-thresholds.ts) (Tier 1) 定義
+- [momentum/run-tail-test.ts](../../src/backtest/momentum/run-tail-test.ts) 作成 (Phase 1 framework 経由、StrategyResult 直接生成)
+- `tail-test:momentum` package.json script 追加
+- レポート: [docs/reports/momentum-tail-2026-05-01.md](../reports/momentum-tail-2026-05-01.md)
+
+**主要結果（2015-01-01〜2026-05-01, 約 11 年, 888 trades）:**
+
+| 指標 | 値 | 閾値 | 判定 |
+|---|---|---|---|
+| Win Rate | 38.63% | ≥ 50% | ❌ FAIL |
+| Profit Factor | 0.41 | ≥ 1.3 | ❌ FAIL |
+| CAGR | -14.77% | ≥ 8% | ❌ FAIL |
+| Max DD | 83.72% | ≤ 30% | ❌ FAIL |
+| CVaR 5% | $-32.65 | ≥ $-132 | ✅ PASS |
+| テール期間 DD（最悪） | 7.73% (2022 Bear) | ≤ 35% | ✅ PASS |
+| テール期間 PnL%（最悪） | -7.69% | ≥ -45% | ✅ PASS |
+
+**Verdict: ❌ FAIL 3/7 checks (skipped 0)**
+
+**観察:**
+- 平時 metrics 4 指標すべてが閾値を割り、現行パラメータの cross-sectional momentum は単独 viable ではない
+- Net Return -83.55%, Profit Factor 0.41 — リバランス頻度（15 営業日）と lookback（42 日）で whipsaw が頻発、888 trade のうち 545 が loser
+- Max DD 83.72%（2015-01-02〜2026-04-14 まで未復元）は壊滅的で、closed-trade 損失の連鎖が equity を継続的に蝕んでいる
+- CVaR 5% / 最悪 trade $-70.88 / 最大連敗 15 — 個別損失自体は管理されているが、**勝ち trade が損失を補填できない**点が致命的
+- VIX レジーム別 PnL/trade はいずれも負（>30 は 0 trade、20-30 で $-2.82、≤20 で $-3.22）— vol regime 非依存に negative
+- 事前定義イベントでは 2015-China Selloff (勝率 8.33%, $-150.84) が最も損失大、それ以外のテール期間の DD は 2-8% 程度に収まる
+
+**次のフェーズへの判断:**
+- Phase 2-B 単独閾値で FAIL（PEAD と同パターン）、portfolio 単独補完候補としては推奨度低
+- credit-spread との相関は Phase 4 の分析で評価予定。両戦略がほぼ独立しているなら微小ウェイトで残す可能性あり
+- 現行パラメータ（lookbackDays=42, topN=10, rebalanceDays=15）は cross-sectional momentum の効きが弱い米国大型株 universe に対してチューニング不足の疑い — Phase 4 後の意思決定に委ねる
+- Phase 4 で credit-spread + dual-momentum + PEAD + Momentum の 4 戦略相関分析予定
+
