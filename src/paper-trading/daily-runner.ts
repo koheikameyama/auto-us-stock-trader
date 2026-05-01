@@ -145,22 +145,37 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
         }
       }
     } else if (action.action === "EXPIRE") {
-      await expirePosition(prisma, {
-        positionId: dbPos.id,
-        reason: action.reason,
-        finalValue: action.finalValue,
-      });
-      console.log(`  Expired: reason=${action.reason}, value=${action.finalValue}`);
-      const updated = await prisma.position.findUnique({ where: { id: dbPos.id } });
-      await sendSlack({
-        text: formatExpire({
-          shortStrike: dbPos.shortStrike,
-          longStrike: dbPos.longStrike,
-          reason: action.reason,
-          netPnl: updated?.netPnl ?? null,
-        }),
-        level: "info",
-      });
+      if (dryRun) {
+        console.log(`  [DRY RUN] Would expire: reason=${action.reason}, value=${action.finalValue}`);
+      } else {
+        try {
+          await expirePosition(prisma, {
+            positionId: dbPos.id,
+            reason: action.reason,
+            finalValue: action.finalValue,
+          });
+          console.log(`  Expired: reason=${action.reason}, value=${action.finalValue}`);
+          const updated = await prisma.position.findUnique({ where: { id: dbPos.id } });
+          await sendSlack({
+            text: formatExpire({
+              shortStrike: dbPos.shortStrike,
+              longStrike: dbPos.longStrike,
+              reason: action.reason,
+              netPnl: updated?.netPnl ?? null,
+            }),
+            level: "info",
+          });
+        } catch (e: any) {
+          console.error(`  ❌ Expire failed: ${e.message}`);
+          await prisma.errorLog.create({
+            data: { category: "EXPIRE_FAILED", message: e.message, context: { positionId: dbPos.id, reason: action.reason } },
+          });
+          await sendSlack({
+            text: formatErrorAlert("EXPIRE_FAILED", e.message),
+            level: "error",
+          });
+        }
+      }
     }
 
     await prisma.signalLog.create({
@@ -177,6 +192,9 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
       },
     });
   }
+
+  // Re-query OPEN count after close/expire loop (some positions may have transitioned)
+  const openPositionCount = await prisma.position.count({ where: { state: "OPEN" } });
 
   // ── 6. equity 計算 + DD stop 状態遷移 ──
   const netLiq = accountSummary.netLiquidation;
@@ -232,7 +250,7 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
     vix,
     smaGspc: sma50,
     cash: netLiq,
-    openPositionCount: dbOpenSpreads.length,
+    openPositionCount,
     ddStopActive: ddState.ddStopActive,
     tradingDays,
     config: { ...US_CREDIT_SPREAD_DEFAULTS, startDate: today, endDate: today },
@@ -321,7 +339,7 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
       cash: netLiq,
       positionsValue,
       totalEquity,
-      openPositionCount: dbOpenSpreads.length,
+      openPositionCount,
       ddStopActive: ddState.ddStopActive,
       runningPeak: ddState.runningPeak,
       ddStopActivatedDate: ddState.ddStopActivatedDate ? new Date(ddState.ddStopActivatedDate) : null,
@@ -330,7 +348,7 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
       cash: netLiq,
       positionsValue,
       totalEquity,
-      openPositionCount: dbOpenSpreads.length,
+      openPositionCount,
       ddStopActive: ddState.ddStopActive,
       runningPeak: ddState.runningPeak,
       ddStopActivatedDate: ddState.ddStopActivatedDate ? new Date(ddState.ddStopActivatedDate) : null,
@@ -344,7 +362,7 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
   });
   const dailyPnl = yesterday ? totalEquity - yesterday.totalEquity : 0;
   await sendSlack({
-    text: formatDailySummary({ date: today, openCount: dbOpenSpreads.length, equity: totalEquity, dailyPnl }),
+    text: formatDailySummary({ date: today, openCount: openPositionCount, equity: totalEquity, dailyPnl }),
     level: "info",
   });
 }
