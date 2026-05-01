@@ -7,6 +7,7 @@
  *   npx tsx src/paper-trading/daily-runner.ts --dry-run        # 発注スキップ
  */
 
+import { pathToFileURL } from "url";
 import dayjs from "dayjs";
 import { PrismaClient } from "@prisma/client";
 import { IBKRClient } from "./ibkr-client";
@@ -377,23 +378,16 @@ async function main() {
   } finally {
     await ibkr.disconnect();
     await prisma.$disconnect();
+    const elapsed = Date.now() - startTime.getTime();
+    console.log(`[${new Date().toISOString()}] Daily runner end (elapsed ${elapsed}ms)`);
   }
-
-  const elapsed = Date.now() - startTime.getTime();
-  console.log(`[${new Date().toISOString()}] Daily runner end (elapsed ${elapsed}ms)`);
 }
 
-// CLI entry: only run main() when executed directly (not when imported as a module)
-const isDirectRun = (() => {
-  try {
-    const argv1 = process.argv[1];
-    if (!argv1) return false;
-    // Match "daily-runner.ts" or "daily-runner.js" filename in argv
-    return /daily-runner\.(ts|js|mjs|cjs)$/.test(argv1);
-  } catch {
-    return false;
-  }
-})();
+// CLI entry: only run main() when executed directly (not when imported as a module).
+// Canonical Node ESM idiom: compare import.meta.url to argv[1] converted to file:// URL.
+const isDirectRun = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
 
 if (isDirectRun) {
   main()
