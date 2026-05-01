@@ -29,24 +29,17 @@ import {
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
 
-async function main() {
-  const startTime = new Date();
-  console.log(`[${startTime.toISOString()}] Daily runner start (dry-run=${DRY_RUN})`);
+export interface DailyCycleDeps {
+  ibkr: IBKRClient;
+  prisma: PrismaClient;
+  today: string;       // "YYYY-MM-DD"
+  dryRun: boolean;
+}
 
-  // ── 1. kill switch チェック ──
-  if (isKillSwitchActive()) {
-    const info = getKillSwitchInfo();
-    console.log(`⏸ Kill switch active: ${info.reason} (since ${info.createdAt?.toISOString()})`);
-    await sendSlack({ text: formatKillSwitch(info.reason ?? "(no reason)"), level: "warn" });
-    process.exit(0);
-  }
+export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
+  const { ibkr, prisma, today, dryRun } = deps;
 
-  const prisma = new PrismaClient();
-  const ibkr = new IBKRClient({ clientId: 100 });
-
-  // ── 2. IBKR 接続 + アカウント情報 ──
-  console.log("Connecting to IBKR TWS...");
-  await withRetry(() => ibkr.connect(), { retries: 3, intervalMs: 10_000 });
+  // ── 2. アカウント情報 ──
   const accountSummary = await withRetry(() => ibkr.getAccountSummary(), { retries: 3, intervalMs: 5_000 });
   console.log(`Account: NetLiq=$${accountSummary.netLiquidation.toLocaleString()}, BP=$${accountSummary.buyingPower.toLocaleString()}`);
 
@@ -71,8 +64,6 @@ async function main() {
   const spy = await withRetry(() => ibkr.getMarketPrice("SPY"), { retries: 3, intervalMs: 5_000 });
   if (spy.last == null) {
     console.error("⚠ SPY price unavailable, skipping today's cycle");
-    await ibkr.disconnect();
-    await prisma.$disconnect();
     return;
   }
   let vix: number;
@@ -80,8 +71,6 @@ async function main() {
     vix = await withRetry(() => ibkr.getVIX(), { retries: 3, intervalMs: 5_000 });
   } catch {
     console.error("⚠ VIX unavailable, skipping today's cycle");
-    await ibkr.disconnect();
-    await prisma.$disconnect();
     return;
   }
   const spotSpy = spy.last;
@@ -89,7 +78,6 @@ async function main() {
   console.log(`  SPY=${spotSpy}, VIX=${vix.toFixed(2)}, gspc=${gspc}`);
 
   // ── 5. 既存スプレッドの evaluateSpread ──
-  const today = dayjs().format("YYYY-MM-DD");
   const dbOpenSpreads = await prisma.position.findMany({ where: { state: "OPEN" } });
   console.log(`Evaluating ${dbOpenSpreads.length} open spread(s)...`);
 
@@ -120,7 +108,7 @@ async function main() {
     console.log(`  ${dbPos.symbol} ${dbPos.shortStrike}/${dbPos.longStrike}: ${action.action}${action.action !== "HOLD" ? `/${action.reason}` : ""}`);
 
     if (action.action === "CLOSE") {
-      if (DRY_RUN) {
+      if (dryRun) {
         console.log(`  [DRY RUN] Would close: reason=${action.reason}, value=${action.currentValue}`);
       } else {
         try {
@@ -293,7 +281,7 @@ async function main() {
           contracts: US_CREDIT_SPREAD_DEFAULTS.contractsPerSpread,
           estimatedCredit: signal.estimatedCredit,
         },
-        { dryRun: DRY_RUN },
+        { dryRun },
       );
       console.log(`  Order: ibkrOrderId=${placed.ibkrOrderId}, status=${placed.status}, filledCredit=${placed.filledCredit ?? "-"}`);
       if (placed.status === "FILLED") {
@@ -358,37 +346,80 @@ async function main() {
     text: formatDailySummary({ date: today, openCount: dbOpenSpreads.length, equity: totalEquity, dailyPnl }),
     level: "info",
   });
+}
 
-  await ibkr.disconnect();
-  await prisma.$disconnect();
+async function main() {
+  const startTime = new Date();
+  console.log(`[${startTime.toISOString()}] Daily runner start (dry-run=${DRY_RUN})`);
+
+  // ── 1. kill switch チェック ──
+  if (isKillSwitchActive()) {
+    const info = getKillSwitchInfo();
+    console.log(`⏸ Kill switch active: ${info.reason} (since ${info.createdAt?.toISOString()})`);
+    await sendSlack({ text: formatKillSwitch(info.reason ?? "(no reason)"), level: "warn" });
+    process.exit(0);
+  }
+
+  const prisma = new PrismaClient();
+  const ibkr = new IBKRClient({ clientId: 100 });
+
+  // ── IBKR 接続 ──
+  console.log("Connecting to IBKR TWS...");
+  await withRetry(() => ibkr.connect(), { retries: 3, intervalMs: 10_000 });
+
+  try {
+    await runDailyCycle({
+      ibkr,
+      prisma,
+      today: dayjs().format("YYYY-MM-DD"),
+      dryRun: DRY_RUN,
+    });
+  } finally {
+    await ibkr.disconnect();
+    await prisma.$disconnect();
+  }
 
   const elapsed = Date.now() - startTime.getTime();
   console.log(`[${new Date().toISOString()}] Daily runner end (elapsed ${elapsed}ms)`);
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch(async (e) => {
-    console.error("❌ Daily runner failed:", e?.message ?? e);
-    if (e?.stack) console.error(e.stack);
-    try {
-      const prisma = new PrismaClient();
-      await prisma.errorLog.create({
-        data: {
-          category: "UNCAUGHT_EXCEPTION",
-          message: String(e?.message ?? e),
-          context: { stack: e?.stack ?? null },
-        },
-      });
-      await prisma.$disconnect();
-    } catch (logErr) {
-      console.error("Failed to write ErrorLog:", logErr);
-    }
-    try {
-      await sendSlack({
-        text: formatErrorAlert("UNCAUGHT_EXCEPTION", String(e?.message ?? e)),
-        level: "critical",
-      });
-    } catch {}
-    process.exit(1);
-  });
+// CLI entry: only run main() when executed directly (not when imported as a module)
+const isDirectRun = (() => {
+  try {
+    const argv1 = process.argv[1];
+    if (!argv1) return false;
+    // Match "daily-runner.ts" or "daily-runner.js" filename in argv
+    return /daily-runner\.(ts|js|mjs|cjs)$/.test(argv1);
+  } catch {
+    return false;
+  }
+})();
+
+if (isDirectRun) {
+  main()
+    .then(() => process.exit(0))
+    .catch(async (e) => {
+      console.error("❌ Daily runner failed:", e?.message ?? e);
+      if (e?.stack) console.error(e.stack);
+      try {
+        const prisma = new PrismaClient();
+        await prisma.errorLog.create({
+          data: {
+            category: "UNCAUGHT_EXCEPTION",
+            message: String(e?.message ?? e),
+            context: { stack: e?.stack ?? null },
+          },
+        });
+        await prisma.$disconnect();
+      } catch (logErr) {
+        console.error("Failed to write ErrorLog:", logErr);
+      }
+      try {
+        await sendSlack({
+          text: formatErrorAlert("UNCAUGHT_EXCEPTION", String(e?.message ?? e)),
+          level: "critical",
+        });
+      } catch {}
+      process.exit(1);
+    });
+}
