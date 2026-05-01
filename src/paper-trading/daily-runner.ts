@@ -31,6 +31,7 @@ import {
   sendSlack,
   formatEntrySuccess, formatCloseSuccess, formatExpire,
   formatDDStop, formatDailySummary, formatErrorAlert, formatKillSwitch, formatDuplicateOrder,
+  formatNonTradingDay,
 } from "./slack-notifier";
 
 const args = process.argv.slice(2);
@@ -47,6 +48,14 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
   const { alpaca, prisma, today, dryRun } = deps;
 
   const summaryEvents: string[] = [];
+
+  // ── 1. 取引日チェック（祝日 / 短縮取引日含む休場で早期 return）──
+  const isTradingDay = await withRetry(() => alpaca.isTradingDay(today), { retries: 3, intervalMs: 5_000 });
+  if (!isTradingDay) {
+    console.log(`Today (${today}) is not a US trading day. Skipping cycle.`);
+    await sendSlack({ text: formatNonTradingDay(today), level: "info" });
+    return;
+  }
 
   // ── 2. アカウント情報 ──
   const accountSummary = await withRetry(() => alpaca.getAccountSummary(), { retries: 3, intervalMs: 5_000 });

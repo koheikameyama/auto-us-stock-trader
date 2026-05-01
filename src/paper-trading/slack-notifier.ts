@@ -85,6 +85,10 @@ export function formatExpire(p: {
   return `*EXPIRED* (${p.reason}) SPY ${p.shortStrike}/${p.longStrike} · P&L *${fmtMoney(p.netPnl ?? 0, { signed: true })}*`;
 }
 
+export function formatNonTradingDay(date: string): string {
+  return `*Non-trading day* — ${date} (skipped daily cycle)`;
+}
+
 export function formatEntrySkip(
   reason: string,
   ctx: { spy: number; vix: number; sma50?: number | null },

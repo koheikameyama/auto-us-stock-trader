@@ -40,6 +40,8 @@ function makeMockAlpaca(overrides: Partial<Record<string, any>> = {}) {
     connect: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
     isConnected: () => true,
+    isTradingDay: vi.fn().mockResolvedValue(true),
+    getCalendar: vi.fn().mockResolvedValue([{ date: "2026-05-01", open: "09:30", close: "16:00" }]),
     getAccountSummary: vi.fn().mockResolvedValue({
       netLiquidation: 100_000,
       totalCashValue: 100_000,
@@ -128,6 +130,26 @@ describe("runDailyCycle integration", () => {
     const snap = await prisma.dailyEquitySnapshot.findUnique({ where: { date: new Date("2026-05-01") } });
     expect(snap).toBeTruthy();
     expect(snap?.totalEquity).toBe(100_000);
+  });
+
+  it("skips cycle when today is not a trading day (US holiday / weekend)", async () => {
+    const mockAlpaca = makeMockAlpaca({
+      isTradingDay: vi.fn().mockResolvedValue(false),
+    });
+    const { runDailyCycle } = await import("../daily-runner");
+
+    await runDailyCycle({
+      alpaca: mockAlpaca as any,
+      prisma,
+      today: "2026-05-25", // Memorial Day 2026
+      dryRun: true,
+    });
+
+    expect(mockAlpaca.isTradingDay).toHaveBeenCalledWith("2026-05-25");
+    expect(mockAlpaca.getAccountSummary).not.toHaveBeenCalled();
+    expect(mockAlpaca.placeMultiLegOrder).not.toHaveBeenCalled();
+    const snap = await prisma.dailyEquitySnapshot.findUnique({ where: { date: new Date("2026-05-25") } });
+    expect(snap).toBeNull();
   });
 
   it("skips cycle when VIX is unavailable from DB", async () => {

@@ -45,6 +45,14 @@ export interface MarketPrice {
   last: number | null;
 }
 
+export interface TradingCalendarDay {
+  date: string;        // YYYY-MM-DD
+  open: string;        // HH:MM (NY local)
+  close: string;       // HH:MM (NY local)
+  session_open?: string;
+  session_close?: string;
+}
+
 export interface OptionContract {
   occSymbol: string;
   strike: number;
@@ -118,6 +126,23 @@ export class AlpacaClient {
   async disconnect(): Promise<void> {}
   isConnected(): boolean {
     return true;
+  }
+
+  /**
+   * Returns the NYSE/NASDAQ calendar for [start, end] inclusive (YYYY-MM-DD).
+   * Empty array indicates the entire range is non-trading (weekend/holiday).
+   */
+  async getCalendar(start: string, end: string): Promise<TradingCalendarDay[]> {
+    const params = new URLSearchParams({ start, end });
+    return await this.request<TradingCalendarDay[]>(
+      `/calendar?${params.toString()}`,
+    );
+  }
+
+  /** True if `date` (YYYY-MM-DD) is a US equities trading day. */
+  async isTradingDay(date: string): Promise<boolean> {
+    const cal = await this.getCalendar(date, date);
+    return cal.some((d) => d.date === date);
   }
 
   async getAccountSummary(): Promise<AccountSummary> {
