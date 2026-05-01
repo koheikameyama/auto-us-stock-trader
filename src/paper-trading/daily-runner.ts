@@ -1,84 +1,100 @@
 // src/paper-trading/daily-runner.ts
 /**
- * IBKR Paper Trading 日次実行
+ * Alpaca Paper Trading 日次実行
  *
  * Usage:
  *   npx tsx src/paper-trading/daily-runner.ts                 # 通常実行
  *   npx tsx src/paper-trading/daily-runner.ts --dry-run        # 発注スキップ
+ *
+ * Required env:
+ *   ALPACA_API_KEY
+ *   ALPACA_API_SECRET
+ *   ALPACA_API_ENDPOINT  (e.g. https://paper-api.alpaca.markets/v2)
+ *   ALPACA_DATA_ENDPOINT (optional; default https://data.alpaca.markets)
  */
 
+import { pathToFileURL } from "url";
 import dayjs from "dayjs";
 import { PrismaClient } from "@prisma/client";
-import { IBKRClient } from "./ibkr-client";
+import { AlpacaClient } from "./alpaca-client";
 import { isKillSwitchActive, getKillSwitchInfo } from "./kill-switch";
 import { reconcilePositions } from "./position-syncer";
+import { withRetry } from "./with-retry";
 import { evaluateSpread } from "../backtest/credit-spread/spread-evaluator";
 import { calcDDStopState } from "../backtest/credit-spread/dd-stop";
 import { generateEntrySignal } from "../backtest/credit-spread/signal-generator";
 import { US_CREDIT_SPREAD_DEFAULTS } from "../backtest/us/us-credit-spread-config";
 import type { SimulatedSpread } from "../backtest/us/us-credit-spread-types";
 import { fetchIndexFromDB } from "../backtest/data-fetcher";
-import { placeNewSpreadOrder } from "./order-manager";
+import { placeNewSpreadOrder, closeSpreadOrder, expirePosition } from "./order-manager";
+import {
+  sendSlack,
+  formatEntrySuccess, formatCloseSuccess, formatExpire,
+  formatDDStop, formatDailySummary, formatErrorAlert, formatKillSwitch, formatDuplicateOrder,
+} from "./slack-notifier";
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
 
-async function main() {
-  const startTime = new Date();
-  console.log(`[${startTime.toISOString()}] Daily runner start (dry-run=${DRY_RUN})`);
+export interface DailyCycleDeps {
+  alpaca: AlpacaClient;
+  prisma: PrismaClient;
+  today: string;       // "YYYY-MM-DD"
+  dryRun: boolean;
+}
 
-  // ── 1. kill switch チェック ──
-  if (isKillSwitchActive()) {
-    const info = getKillSwitchInfo();
-    console.log(`⏸ Kill switch active: ${info.reason} (since ${info.createdAt?.toISOString()})`);
-    process.exit(0);
-  }
+export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
+  const { alpaca, prisma, today, dryRun } = deps;
 
-  const prisma = new PrismaClient();
-  const ibkr = new IBKRClient({ clientId: 100 });
+  const summaryEvents: string[] = [];
 
-  // ── 2. IBKR 接続 + アカウント情報 ──
-  console.log("Connecting to IBKR TWS...");
-  await ibkr.connect();
-  const accountSummary = await ibkr.getAccountSummary();
+  // ── 2. アカウント情報 ──
+  const accountSummary = await withRetry(() => alpaca.getAccountSummary(), { retries: 3, intervalMs: 5_000 });
   console.log(`Account: NetLiq=$${accountSummary.netLiquidation.toLocaleString()}, BP=$${accountSummary.buyingPower.toLocaleString()}`);
 
   // ── 3. 既存ポジション同期 ──
   console.log("Reconciling positions...");
-  const { mismatches, ibkrLegs, dbOpenPositions } = await reconcilePositions(ibkr, prisma);
-  console.log(`  IBKR active legs: ${ibkrLegs.length}`);
+  const { mismatches, brokerLegs, dbOpenPositions } = await reconcilePositions(alpaca, prisma);
+  console.log(`  Broker active legs: ${brokerLegs.length}`);
   console.log(`  DB OPEN positions: ${dbOpenPositions}`);
   if (mismatches.length > 0) {
     console.error(`⚠ ${mismatches.length} position mismatches detected:`);
     for (const m of mismatches) {
       console.error(`  ${m.type}: ${m.symbol} ${m.shortStrike}/${m.longStrike} ${m.expiry}`);
     }
+    await sendSlack({
+      text: `Position mismatch: ${mismatches.length} differences (${mismatches.map((m) => m.type).join(", ")})`,
+      level: "warn",
+    });
   }
 
-  // ── 4. live data 取得 (SPY / VIX) ──
+  // ── 4. live data 取得 (SPY) + DB から VIX (前日 close) ──
   console.log("Fetching market data...");
-  const spy = await ibkr.getMarketPrice("SPY");
-  if (spy.last == null) {
+  const spy = await withRetry(() => alpaca.getMarketPrice("SPY"), { retries: 3, intervalMs: 5_000 });
+  const spotSpy =
+    spy.bid != null && spy.ask != null
+      ? (spy.bid + spy.ask) / 2
+      : (spy.bid ?? spy.ask);
+  if (spotSpy == null) {
     console.error("⚠ SPY price unavailable, skipping today's cycle");
-    await ibkr.disconnect();
-    await prisma.$disconnect();
     return;
   }
-  let vix: number;
-  try {
-    vix = await ibkr.getVIX();
-  } catch {
-    console.error("⚠ VIX unavailable, skipping today's cycle");
-    await ibkr.disconnect();
-    await prisma.$disconnect();
+
+  const vixLookbackStart = dayjs(today).subtract(10, "day").format("YYYY-MM-DD");
+  const vixHistorical = await fetchIndexFromDB("^VIX", vixLookbackStart, today, 0);
+  const sortedVixDates = [...vixHistorical.keys()].sort();
+  const vix = sortedVixDates.length
+    ? vixHistorical.get(sortedVixDates[sortedVixDates.length - 1]) ?? null
+    : null;
+  if (vix == null) {
+    console.error("⚠ VIX unavailable from DB, skipping today's cycle");
     return;
   }
-  const spotSpy = spy.last;
+
   const gspc = spotSpy * 10;
-  console.log(`  SPY=${spotSpy}, VIX=${vix.toFixed(2)}, gspc=${gspc}`);
+  console.log(`  SPY=${spotSpy}, VIX=${vix.toFixed(2)} (prior-close), gspc=${gspc}`);
 
   // ── 5. 既存スプレッドの evaluateSpread ──
-  const today = dayjs().format("YYYY-MM-DD");
   const dbOpenSpreads = await prisma.position.findMany({ where: { state: "OPEN" } });
   console.log(`Evaluating ${dbOpenSpreads.length} open spread(s)...`);
 
@@ -108,27 +124,90 @@ async function main() {
 
     console.log(`  ${dbPos.symbol} ${dbPos.shortStrike}/${dbPos.longStrike}: ${action.action}${action.action !== "HOLD" ? `/${action.reason}` : ""}`);
 
-    if (action.action === "CLOSE" || action.action === "EXPIRE") {
-      // 仮で SignalLog だけ記録（実発注は Phase D 以降で）
-      await prisma.signalLog.create({
-        data: {
-          date: new Date(today),
-          signalType: "CLOSE",
-          reason: action.reason,
-          details: {
+    if (action.action === "CLOSE") {
+      if (dryRun) {
+        console.log(`  [DRY RUN] Would close: reason=${action.reason}, value=${action.currentValue}`);
+      } else {
+        try {
+          const closed = await closeSpreadOrder(alpaca, prisma, {
+            positionId: dbPos.id,
+            reason: action.reason,
+            currentSpreadValue: action.currentValue,
+          });
+          console.log(`  Closed brokerOrderId=${closed.brokerOrderId}, status=${closed.status}`);
+          if (closed.status === "FILLED") {
+            const daysHeld = Math.floor((Date.now() - dbPos.entryDate.getTime()) / 86400000);
+            const updated = await prisma.position.findUnique({ where: { id: dbPos.id } });
+            summaryEvents.push(formatCloseSuccess({
+              shortStrike: dbPos.shortStrike,
+              longStrike: dbPos.longStrike,
+              reason: action.reason,
+              netPnl: updated?.netPnl ?? null,
+              daysHeld,
+            }));
+          }
+        } catch (e: any) {
+          console.error(`  ❌ Close failed: ${e.message}`);
+          await prisma.errorLog.create({
+            data: { category: "CLOSE_FAILED", message: e.message, context: { positionId: dbPos.id, reason: action.reason } },
+          });
+          await sendSlack({
+            text: formatErrorAlert("CLOSE_FAILED", e.message),
+            level: "error",
+          });
+        }
+      }
+    } else if (action.action === "EXPIRE") {
+      if (dryRun) {
+        console.log(`  [DRY RUN] Would expire: reason=${action.reason}, value=${action.finalValue}`);
+      } else {
+        try {
+          await expirePosition(prisma, {
+            positionId: dbPos.id,
+            reason: action.reason,
+            finalValue: action.finalValue,
+          });
+          console.log(`  Expired: reason=${action.reason}, value=${action.finalValue}`);
+          const updated = await prisma.position.findUnique({ where: { id: dbPos.id } });
+          summaryEvents.push(formatExpire({
             shortStrike: dbPos.shortStrike,
             longStrike: dbPos.longStrike,
-            currentValue: (action as any).currentValue ?? null,
-            finalValue: (action as any).finalValue ?? null,
-          },
-        },
-      });
+            reason: action.reason,
+            netPnl: updated?.netPnl ?? null,
+          }));
+        } catch (e: any) {
+          console.error(`  ❌ Expire failed: ${e.message}`);
+          await prisma.errorLog.create({
+            data: { category: "EXPIRE_FAILED", message: e.message, context: { positionId: dbPos.id, reason: action.reason } },
+          });
+          await sendSlack({
+            text: formatErrorAlert("EXPIRE_FAILED", e.message),
+            level: "error",
+          });
+        }
+      }
     }
+
+    await prisma.signalLog.create({
+      data: {
+        date: new Date(today),
+        signalType: action.action,
+        reason: action.action === "HOLD" ? "hold" : action.reason,
+        details: {
+          shortStrike: dbPos.shortStrike,
+          longStrike: dbPos.longStrike,
+          currentValue: (action as any).currentValue ?? null,
+          finalValue: (action as any).finalValue ?? null,
+        },
+      },
+    });
   }
+
+  let openPositionCount = await prisma.position.count({ where: { state: "OPEN" } });
 
   // ── 6. equity 計算 + DD stop 状態遷移 ──
   const netLiq = accountSummary.netLiquidation;
-  const positionsValue = 0;  // 簡易、Phase D 以降で詳細化
+  const positionsValue = 0;
   const totalEquity = netLiq;
 
   const lastSnapshot = await prisma.dailyEquitySnapshot.findFirst({
@@ -146,9 +225,14 @@ async function main() {
     config: US_CREDIT_SPREAD_DEFAULTS,
   });
   console.log(`DD stop: active=${ddState.ddStopActive} (transition=${ddState.transition}), peak=$${ddState.runningPeak.toLocaleString()}`);
+  if (ddState.transition !== "UNCHANGED") {
+    await sendSlack({
+      text: formatDDStop(ddState.transition, ddState.runningPeak, totalEquity),
+      level: "warn",
+    });
+  }
 
   // ── 7. 新規エントリー判定 ──
-  // SMA50 計算: DB の ^GSPC 過去 50 日 close から
   const lookbackEnd = today;
   const lookbackStart = dayjs(today).subtract(75, "day").format("YYYY-MM-DD");
   const gspcHistorical = await fetchIndexFromDB("^GSPC", lookbackStart, lookbackEnd, 0);
@@ -158,7 +242,6 @@ async function main() {
     : null;
   console.log(`SMA50(GSPC) = ${sma50?.toFixed(2) ?? "(unavailable)"}`);
 
-  // tradingDays: 簡易にカレンダー日（weekday）を生成
   const tradingDays: string[] = [];
   for (let i = 0; i < 100; i++) {
     const d = dayjs(today).add(i, "day");
@@ -166,7 +249,6 @@ async function main() {
     if (dow !== 0 && dow !== 6) tradingDays.push(d.format("YYYY-MM-DD"));
   }
 
-  // 信号生成
   const signal = generateEntrySignal({
     today,
     gspc,
@@ -174,7 +256,7 @@ async function main() {
     vix,
     smaGspc: sma50,
     cash: netLiq,
-    openPositionCount: dbOpenSpreads.length,
+    openPositionCount,
     ddStopActive: ddState.ddStopActive,
     tradingDays,
     config: { ...US_CREDIT_SPREAD_DEFAULTS, startDate: today, endDate: today },
@@ -207,7 +289,7 @@ async function main() {
     const expiryYYYYMMDD = signal.expirationDate.replace(/-/g, "");
     try {
       const placed = await placeNewSpreadOrder(
-        ibkr,
+        alpaca,
         prisma,
         {
           underlying: "SPY",
@@ -217,9 +299,17 @@ async function main() {
           contracts: US_CREDIT_SPREAD_DEFAULTS.contractsPerSpread,
           estimatedCredit: signal.estimatedCredit,
         },
-        { dryRun: DRY_RUN },
+        { dryRun },
       );
-      console.log(`  Order: ibkrOrderId=${placed.ibkrOrderId}, status=${placed.status}, filledCredit=${placed.filledCredit ?? "-"}`);
+      console.log(`  Order: brokerOrderId=${placed.brokerOrderId}, status=${placed.status}, filledCredit=${placed.filledCredit ?? "-"}`);
+      if (placed.status === "FILLED") {
+        summaryEvents.push(formatEntrySuccess({
+          shortStrike: signal.shortStrike,
+          longStrike: signal.longStrike,
+          expiry: signal.expirationDate,
+          filledCredit: placed.filledCredit,
+        }));
+      }
     } catch (e: any) {
       console.error(`  ❌ Order failed: ${e.message}`);
       await prisma.errorLog.create({
@@ -229,10 +319,16 @@ async function main() {
           context: { signal: { reason: signal.reason } },
         },
       });
+      const isDuplicate = /Duplicate/i.test(e.message);
+      await sendSlack({
+        text: isDuplicate ? formatDuplicateOrder(e.message) : formatErrorAlert("ORDER_FAILED", e.message),
+        level: isDuplicate ? "critical" : "error",
+      });
     }
   }
 
   // ── 8. DailyEquitySnapshot を保存 ──
+  openPositionCount = await prisma.position.count({ where: { state: "OPEN" } });
   await prisma.dailyEquitySnapshot.upsert({
     where: { date: new Date(today) },
     create: {
@@ -240,7 +336,7 @@ async function main() {
       cash: netLiq,
       positionsValue,
       totalEquity,
-      openPositionCount: dbOpenSpreads.length,
+      openPositionCount,
       ddStopActive: ddState.ddStopActive,
       runningPeak: ddState.runningPeak,
       ddStopActivatedDate: ddState.ddStopActivatedDate ? new Date(ddState.ddStopActivatedDate) : null,
@@ -249,7 +345,7 @@ async function main() {
       cash: netLiq,
       positionsValue,
       totalEquity,
-      openPositionCount: dbOpenSpreads.length,
+      openPositionCount,
       ddStopActive: ddState.ddStopActive,
       runningPeak: ddState.runningPeak,
       ddStopActivatedDate: ddState.ddStopActivatedDate ? new Date(ddState.ddStopActivatedDate) : null,
@@ -257,17 +353,85 @@ async function main() {
   });
   console.log(`DailyEquitySnapshot saved for ${today}`);
 
-  await ibkr.disconnect();
-  await prisma.$disconnect();
-
-  const elapsed = Date.now() - startTime.getTime();
-  console.log(`[${new Date().toISOString()}] Daily runner end (elapsed ${elapsed}ms)`);
+  const yesterday = await prisma.dailyEquitySnapshot.findFirst({
+    where: { date: { lt: new Date(today) } },
+    orderBy: { date: "desc" },
+  });
+  const dailyPnl = yesterday ? totalEquity - yesterday.totalEquity : 0;
+  await sendSlack({
+    text: formatDailySummary({ date: today, openCount: openPositionCount, equity: totalEquity, dailyPnl, events: summaryEvents }),
+    level: "info",
+  });
 }
 
-main()
-  .then(() => process.exit(0))
-  .catch(async (e) => {
-    console.error("❌ Daily runner failed:", e.message);
-    if (e.stack) console.error(e.stack);
-    process.exit(1);
+function requireEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env: ${name}`);
+  return v;
+}
+
+async function main() {
+  const startTime = new Date();
+  console.log(`[${startTime.toISOString()}] Daily runner start (dry-run=${DRY_RUN})`);
+
+  if (isKillSwitchActive()) {
+    const info = getKillSwitchInfo();
+    console.log(`⏸ Kill switch active: ${info.reason} (since ${info.createdAt?.toISOString()})`);
+    await sendSlack({ text: formatKillSwitch(info.reason ?? "(no reason)"), level: "warn" });
+    process.exit(0);
+  }
+
+  const prisma = new PrismaClient();
+  const alpaca = new AlpacaClient({
+    apiKey: requireEnv("ALPACA_API_KEY"),
+    apiSecret: requireEnv("ALPACA_API_SECRET"),
+    baseUrl: requireEnv("ALPACA_API_ENDPOINT"),
+    dataUrl: process.env.ALPACA_DATA_ENDPOINT,
   });
+
+  try {
+    await runDailyCycle({
+      alpaca,
+      prisma,
+      today: dayjs().format("YYYY-MM-DD"),
+      dryRun: DRY_RUN,
+    });
+  } finally {
+    await prisma.$disconnect();
+    const elapsed = Date.now() - startTime.getTime();
+    console.log(`[${new Date().toISOString()}] Daily runner end (elapsed ${elapsed}ms)`);
+  }
+}
+
+const isDirectRun = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (isDirectRun) {
+  main()
+    .then(() => process.exit(0))
+    .catch(async (e) => {
+      console.error("❌ Daily runner failed:", e?.message ?? e);
+      if (e?.stack) console.error(e.stack);
+      try {
+        const prisma = new PrismaClient();
+        await prisma.errorLog.create({
+          data: {
+            category: "UNCAUGHT_EXCEPTION",
+            message: String(e?.message ?? e),
+            context: { stack: e?.stack ?? null },
+          },
+        });
+        await prisma.$disconnect();
+      } catch (logErr) {
+        console.error("Failed to write ErrorLog:", logErr);
+      }
+      try {
+        await sendSlack({
+          text: formatErrorAlert("UNCAUGHT_EXCEPTION", String(e?.message ?? e)),
+          level: "critical",
+        });
+      } catch {}
+      process.exit(1);
+    });
+}

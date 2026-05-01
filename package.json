@@ -32,7 +32,8 @@
     "walk-forward:wheel": "tsx scripts/walk-forward/walk-forward-us-wheel.ts",
     "walk-forward:credit-spread": "tsx scripts/walk-forward/walk-forward-us-credit-spread.ts",
     "walk-forward:vix-contango": "tsx scripts/walk-forward/walk-forward-us-vix-contango.ts",
-    "walk-forward:dual-momentum": "tsx scripts/walk-forward/walk-forward-us-dual-momentum.ts"
+    "walk-forward:dual-momentum": "tsx scripts/walk-forward/walk-forward-us-dual-momentum.ts",
+    "paper-trading:weekly-report": "tsx src/paper-trading/weekly-report.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
@@ -43,7 +44,6 @@
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
-    "@stoqey/ib": "^1.5.3",
     "dayjs": "^1.11.20",
     "p-limit": "^7.3.0",
     "technicalindicators": "^3.1.0"
