@@ -68,7 +68,7 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
     });
   }
 
-  // ── 4. live data 取得 (SPY) + DB から VIX (前日 close) ──
+  // ── 4. live data 取得 (SPY) + DB から VIX (当日 close、backfill 完了後の前提) ──
   console.log("Fetching market data...");
   const spy = await withRetry(() => alpaca.getMarketPrice("SPY"), { retries: 3, intervalMs: 5_000 });
   const spotSpy =
@@ -92,7 +92,7 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
   }
 
   const gspc = spotSpy * 10;
-  console.log(`  SPY=${spotSpy}, VIX=${vix.toFixed(2)} (prior-close), gspc=${gspc}`);
+  console.log(`  SPY=${spotSpy}, VIX=${vix.toFixed(2)} (latest close in DB), gspc=${gspc}`);
 
   // ── 5. 既存スプレッドの evaluateSpread ──
   const dbOpenSpreads = await prisma.position.findMany({ where: { state: "OPEN" } });

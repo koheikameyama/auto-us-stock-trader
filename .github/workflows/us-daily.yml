@@ -49,6 +49,29 @@ jobs:
           echo "stock=$STOCK" >> $GITHUB_OUTPUT
           echo "index=$INDEX" >> $GITHUB_OUTPUT
 
+      - name: Set up Node.js
+        if: success()
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Node dependencies
+        if: success()
+        run: npm ci
+
+      - name: Generate Prisma client
+        if: success()
+        run: npx prisma generate
+
+      - name: Run paper-trading daily cycle (Alpaca)
+        if: success()
+        env:
+          ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+          ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+          ALPACA_API_ENDPOINT: ${{ secrets.ALPACA_API_ENDPOINT }}
+        run: npx tsx src/paper-trading/daily-runner.ts
+
       - name: Notify Slack on success
         if: success()
         uses: rtCamp/action-slack-notify@v2
