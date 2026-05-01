@@ -113,7 +113,7 @@ export async function placeNewSpreadOrder(
     ],
     totalQuantity: contracts,
     limitPrice: -estimatedCredit,
-    tif: "day",
+    tif: "gtc",
   };
 
   const result = await alpaca.placeMultiLegOrder(req);
@@ -208,7 +208,7 @@ export async function closeSpreadOrder(
     ],
     totalQuantity: position.contracts,
     limitPrice: input.currentSpreadValue,
-    tif: "day",
+    tif: "gtc",
   });
 
   await prisma.tradingOrder.create({
