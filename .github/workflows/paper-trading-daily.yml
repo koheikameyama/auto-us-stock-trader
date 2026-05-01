@@ -1,0 +1,44 @@
+name: Paper Trading Daily Cycle
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  paper-trading:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+      ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+      ALPACA_API_ENDPOINT: ${{ secrets.ALPACA_API_ENDPOINT }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Run paper-trading daily cycle
+        run: npx tsx src/paper-trading/daily-runner.ts
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_TITLE: "❌ Paper Trading Daily 失敗"
+          SLACK_MESSAGE: |
+            paper-trading の daily-runner でエラーが発生しました。
+            詳細は GitHub Actions ログを確認してください。
+          SLACK_COLOR: danger
+          SLACK_FOOTER: "auto-us-stock-trader"
