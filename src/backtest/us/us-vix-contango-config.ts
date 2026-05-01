@@ -17,7 +17,7 @@ export const US_VIX_CONTANGO_DEFAULTS: Omit<USVixContangoBacktestConfig, "startD
   positionSizing: 1.0, // フル投資（SVXY自体が-0.5xなのでレバ抑制済み）
   stopLossPct: 10, // -10%でストップロス
 
-  commissionPerTrade: 1.0, // $1/trade（IBKR等の典型値）
+  commissionPerTrade: 1.0, // $1/trade（典型値）
   slippagePct: 0.05, // 0.05% slippage
 
   verbose: false,
