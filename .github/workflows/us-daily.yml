@@ -1,9 +1,10 @@
 name: US Daily Backfill
 
 on:
-  schedule:
-    # 平日 JST 7:00 = UTC 22:00（前日）→ 米国市場close後（NY 17:00）
-    - cron: "0 22 * * 1-5"
+  # GitHub Actions の cron は UTC 固定で DST 揺れる + 5-15min 遅延のため、
+  # 起動は cron-job.org から workflow_dispatch を叩く構成に移行（タイムゾーン対応・高精度）。
+  # schedule:
+  #   - cron: "0 22 * * 1-5"  # 旧: UTC 22:00 = NY 17:00 EST / 18:00 EDT
   workflow_dispatch: {}
 
 jobs:
