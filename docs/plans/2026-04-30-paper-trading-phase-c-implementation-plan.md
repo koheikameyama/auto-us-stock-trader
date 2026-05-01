@@ -205,7 +205,7 @@ Refs: KOH-454 (予定)"
 
 Run:
 ```bash
-DATABASE_URL='postgresql://postgres:<REDACTED>@<RAILWAY_HOST>:<RAILWAY_PORT>/railway?schema=auto_us_stock_trader' \
+DATABASE_URL='<RAILWAY_DATABASE_URL>?schema=auto_us_stock_trader' \
   npx prisma migrate deploy 2>&1 | tail -10
 ```
 
@@ -217,7 +217,7 @@ Expected:
 
 Run:
 ```bash
-PROD_URL='postgresql://postgres:<REDACTED>@<RAILWAY_HOST>:<RAILWAY_PORT>/railway'
+PROD_URL='<RAILWAY_DATABASE_URL>'  # Railway dashboard から取得
 psql "$PROD_URL" -c "\dt auto_us_stock_trader.*" | grep -E "TradingOrder|Position|DailyEquitySnapshot|SignalLog|ErrorLog"
 ```
 
