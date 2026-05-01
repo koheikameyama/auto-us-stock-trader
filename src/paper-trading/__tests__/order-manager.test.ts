@@ -1,6 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { placeNewSpreadOrder, isDuplicateOrder, closeSpreadOrder, expirePosition } from "../order-manager";
+import {
+  placeNewSpreadOrder,
+  isDuplicateOrder,
+  closeSpreadOrder,
+  expirePosition,
+  buildOccSymbol,
+} from "../order-manager";
 
 const prisma = new PrismaClient();
 
@@ -14,10 +20,19 @@ describe("order-manager", () => {
     await prisma.position.deleteMany({});
   });
 
-  it("dry-run mode creates TradingOrder without IBKR call", async () => {
-    const fakeIbkr = {} as any;
+  describe("buildOccSymbol", () => {
+    it("formats SPY P 450 expiring 2026-06-19 as SPY260619P00450000", () => {
+      expect(buildOccSymbol("SPY", "20260619", "P", 450)).toBe("SPY260619P00450000");
+    });
+    it("handles fractional strike (e.g. 480.5)", () => {
+      expect(buildOccSymbol("SPY", "20260619", "C", 480.5)).toBe("SPY260619C00480500");
+    });
+  });
+
+  it("dry-run mode creates TradingOrder without broker call", async () => {
+    const fakeAlpaca = {} as any;
     const result = await placeNewSpreadOrder(
-      fakeIbkr,
+      fakeAlpaca,
       prisma,
       {
         underlying: "SPY",
@@ -36,12 +51,13 @@ describe("order-manager", () => {
     expect(orders).toHaveLength(1);
     expect(orders[0].symbol).toBe("SPY");
     expect(orders[0].limitPrice).toBe(-0.85);
+    expect(orders[0].brokerOrderId).toMatch(/^dryrun-/);
   });
 
   it("isDuplicateOrder returns true for same-day duplicate", async () => {
-    const fakeIbkr = {} as any;
+    const fakeAlpaca = {} as any;
     await placeNewSpreadOrder(
-      fakeIbkr,
+      fakeAlpaca,
       prisma,
       { underlying: "SPY", shortStrike: 450, longStrike: 445, expiry: "20260619", contracts: 1, estimatedCredit: 0.85 },
       { dryRun: true },
@@ -51,16 +67,16 @@ describe("order-manager", () => {
   });
 
   it("placeNewSpreadOrder throws on duplicate", async () => {
-    const fakeIbkr = {} as any;
+    const fakeAlpaca = {} as any;
     await placeNewSpreadOrder(
-      fakeIbkr,
+      fakeAlpaca,
       prisma,
       { underlying: "SPY", shortStrike: 450, longStrike: 445, expiry: "20260619", contracts: 1, estimatedCredit: 0.85 },
       { dryRun: true },
     );
     await expect(
       placeNewSpreadOrder(
-        fakeIbkr,
+        fakeAlpaca,
         prisma,
         { underlying: "SPY", shortStrike: 450, longStrike: 445, expiry: "20260619", contracts: 1, estimatedCredit: 0.85 },
         { dryRun: true },
@@ -69,16 +85,13 @@ describe("order-manager", () => {
   });
 
   describe("closeSpreadOrder", () => {
-    it("submits a debit combo order (BUY back short, SELL long) and updates Position state to CLOSED", async () => {
-      const mockIbkr = {
-        qualifyOptionContract: vi.fn()
-          .mockResolvedValueOnce(111) // short put conId
-          .mockResolvedValueOnce(222), // long put conId
-        placeComboOrder: vi.fn().mockResolvedValue({
-          ibkrOrderId: 999,
+    it("submits a debit mleg order (BUY back short, SELL long) and updates Position state to CLOSED", async () => {
+      const mockAlpaca = {
+        placeMultiLegOrder: vi.fn().mockResolvedValue({
+          orderId: "alpaca-uuid-999",
           status: "FILLED",
-          filledPrice: 0.30,    // debit (positive limit)
-          commission: 1.20,
+          filledPrice: 0.30,
+          commission: 0,
         }),
       } as any;
 
@@ -92,21 +105,21 @@ describe("order-manager", () => {
           creditReceived: 0.85,
           entryDate: new Date("2026-05-01"),
           state: "OPEN",
-          totalCommission: 1.20,
+          totalCommission: 0,
         },
       });
 
-      const result = await closeSpreadOrder(mockIbkr, prisma, {
+      const result = await closeSpreadOrder(mockAlpaca, prisma, {
         positionId: position.id,
         reason: "profit_target",
         currentSpreadValue: 0.30,
       });
 
       expect(result.status).toBe("FILLED");
-      expect(mockIbkr.placeComboOrder).toHaveBeenCalledWith(expect.objectContaining({
+      expect(mockAlpaca.placeMultiLegOrder).toHaveBeenCalledWith(expect.objectContaining({
         legs: [
-          expect.objectContaining({ conId: 111, action: "BUY" }),
-          expect.objectContaining({ conId: 222, action: "SELL" }),
+          expect.objectContaining({ occSymbol: "SPY260619P00480000", side: "buy", positionIntent: "buy_to_close" }),
+          expect.objectContaining({ occSymbol: "SPY260619P00475000", side: "sell", positionIntent: "sell_to_close" }),
         ],
         limitPrice: 0.30,
       }));
@@ -115,10 +128,11 @@ describe("order-manager", () => {
       expect(updated?.state).toBe("CLOSED");
       expect(updated?.closeReason).toBe("profit_target");
       expect(updated?.closeSpreadPrice).toBe(0.30);
-      expect(updated?.netPnl).toBeCloseTo(52.60, 2);
+      // Alpaca commission = 0, so netPnl = (0.85 - 0.30) * 100 * 1 - 0 = 55.00
+      expect(updated?.netPnl).toBeCloseTo(55.00, 2);
 
       const order = await prisma.tradingOrder.findFirst({
-        where: { ibkrOrderId: 999 },
+        where: { brokerOrderId: "alpaca-uuid-999" },
       });
       expect(order?.orderType).toBe("EXIT");
       expect(order?.positionId).toBe(position.id);
@@ -150,12 +164,12 @@ describe("order-manager", () => {
           creditReceived: 0.85,
           entryDate: new Date("2026-05-01"),
           state: "OPEN",
-          totalCommission: 1.20,
+          totalCommission: 0,
         },
       });
       await prisma.tradingOrder.create({
         data: {
-          ibkrOrderId: 100,
+          brokerOrderId: "alpaca-uuid-prior",
           symbol: "SPY",
           orderType: "EXIT",
           shortStrike: 480,
@@ -179,7 +193,7 @@ describe("order-manager", () => {
   });
 
   describe("expirePosition", () => {
-    it("marks Position as EXPIRED with finalValue and netPnl, no IBKR call", async () => {
+    it("marks Position as EXPIRED with finalValue and netPnl, no broker call", async () => {
       const position = await prisma.position.create({
         data: {
           symbol: "SPY",
@@ -190,7 +204,7 @@ describe("order-manager", () => {
           creditReceived: 0.85,
           entryDate: new Date("2026-05-01"),
           state: "OPEN",
-          totalCommission: 1.20,
+          totalCommission: 0,
         },
       });
       await expirePosition(prisma, {
@@ -201,7 +215,7 @@ describe("order-manager", () => {
       const updated = await prisma.position.findUnique({ where: { id: position.id } });
       expect(updated?.state).toBe("EXPIRED");
       expect(updated?.closeReason).toBe("expired_worthless");
-      expect(updated?.netPnl).toBeCloseTo(0.85 * 100 - 1.20, 2); // = 83.80
+      expect(updated?.netPnl).toBeCloseTo(0.85 * 100, 2); // = 85.00 (no commission on Alpaca)
     });
   });
 });

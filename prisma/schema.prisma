@@ -70,7 +70,7 @@ model Stock {
 
 model TradingOrder {
   id              String   @id @default(cuid())
-  ibkrOrderId     Int      @unique
+  brokerOrderId   String   @unique
   symbol          String
   orderType       String   // "ENTRY" | "EXIT"
   shortStrike     Float
@@ -151,7 +151,7 @@ model SignalLog {
 model ErrorLog {
   id              String   @id @default(cuid())
   occurredAt      DateTime @default(now())
-  category        String   // "IBKR_CONNECTION" | "ORDER_FAILED" | "DB" | "UNHANDLED"
+  category        String   // "BROKER_CONNECTION" | "ORDER_FAILED" | "DB" | "UNHANDLED"
   message         String
   context         Json?
   resolved        Boolean  @default(false)
