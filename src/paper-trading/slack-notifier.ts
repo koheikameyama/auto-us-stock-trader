@@ -85,8 +85,11 @@ export function formatDailySummary(s: {
   openCount: number;
   equity: number;
   dailyPnl: number;
+  events?: string[];
 }): string {
-  return `Daily summary ${s.date}: open=${s.openCount} equity=$${s.equity.toFixed(0)} ΔPnL=$${s.dailyPnl.toFixed(2)}`;
+  const head = `Daily summary ${s.date}: open=${s.openCount} equity=$${s.equity.toFixed(0)} ΔPnL=$${s.dailyPnl.toFixed(2)}`;
+  if (!s.events || s.events.length === 0) return head;
+  return `${head}\n` + s.events.map((e) => `• ${e}`).join("\n");
 }
 
 export function formatErrorAlert(
