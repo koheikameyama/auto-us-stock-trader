@@ -54,7 +54,7 @@ describe("order-manager", () => {
     expect(orders[0].brokerOrderId).toMatch(/^dryrun-/);
   });
 
-  it("isDuplicateOrder returns true for same-day duplicate", async () => {
+  it("isDuplicateOrder returns true for same-day same-underlying ENTRY", async () => {
     const fakeAlpaca = {} as any;
     await placeNewSpreadOrder(
       fakeAlpaca,
@@ -62,23 +62,34 @@ describe("order-manager", () => {
       { underlying: "SPY", shortStrike: 450, longStrike: 445, expiry: "20260619", contracts: 1, estimatedCredit: 0.85 },
       { dryRun: true },
     );
-    const dup = await isDuplicateOrder(prisma, "SPY", 450, 445, "20260619");
-    expect(dup).toBe(true);
+    expect(await isDuplicateOrder(prisma, "SPY")).toBe(true);
   });
 
-  it("placeNewSpreadOrder throws on duplicate", async () => {
+  it("isDuplicateOrder returns false for different underlying", async () => {
     const fakeAlpaca = {} as any;
     await placeNewSpreadOrder(
       fakeAlpaca,
       prisma,
       { underlying: "SPY", shortStrike: 450, longStrike: 445, expiry: "20260619", contracts: 1, estimatedCredit: 0.85 },
+      { dryRun: true },
+    );
+    expect(await isDuplicateOrder(prisma, "QQQ")).toBe(false);
+  });
+
+  it("placeNewSpreadOrder throws on same-underlying duplicate even when strikes differ (KOH-466)", async () => {
+    const fakeAlpaca = {} as any;
+    await placeNewSpreadOrder(
+      fakeAlpaca,
+      prisma,
+      { underlying: "SPY", shortStrike: 667, longStrike: 662, expiry: "20260605", contracts: 1, estimatedCredit: 0.97 },
       { dryRun: true },
     );
     await expect(
       placeNewSpreadOrder(
         fakeAlpaca,
         prisma,
-        { underlying: "SPY", shortStrike: 450, longStrike: 445, expiry: "20260619", contracts: 1, estimatedCredit: 0.85 },
+        // 同日 / 同 underlying / strike だけ違う ─ 旧実装ではすり抜けていたケース
+        { underlying: "SPY", shortStrike: 695, longStrike: 690, expiry: "20260605", contracts: 1, estimatedCredit: 0.96 },
         { dryRun: true },
       ),
     ).rejects.toThrow(/Duplicate/);

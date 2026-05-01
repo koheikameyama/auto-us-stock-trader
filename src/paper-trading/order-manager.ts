@@ -49,22 +49,23 @@ export function buildOccSymbol(
   return `${underlying}${yymmdd}${right}${strikePart}`;
 }
 
-/** 同日に同じ symbol/strikes/expiry で entry 注文が DB にあるか確認 */
+/**
+ * 同日に同じ underlying で ENTRY 注文が DB にあるか確認。
+ *
+ * Strike を見ない理由: SPY 価格が日中に動いて signal-generator が選ぶ strike が
+ * 変わると、「同じ underlying / 同じ日に 2 本目」を別注文として通してしまう。
+ * 当戦略では同じ underlying を 1 日に複数回 ENTRY する想定がないので、
+ * symbol + 当日 + ENTRY の組合せで block する。
+ */
 export async function isDuplicateOrder(
   prisma: PrismaClient,
   underlying: string,
-  shortStrike: number,
-  longStrike: number,
-  expiry: string,
 ): Promise<boolean> {
-  const today = dayjs().format("YYYY-MM-DD");
+  const todayStart = dayjs().startOf("day").toDate();
   const existing = await prisma.tradingOrder.findFirst({
     where: {
       symbol: underlying,
-      shortStrike,
-      longStrike,
-      expiry: expiryToDate(expiry),
-      submittedAt: { gte: new Date(`${today}T00:00:00Z`) },
+      submittedAt: { gte: todayStart },
       orderType: "ENTRY",
     },
   });
@@ -79,8 +80,8 @@ export async function placeNewSpreadOrder(
 ): Promise<PlacedSpread> {
   const { underlying, shortStrike, longStrike, expiry, contracts, estimatedCredit } = input;
 
-  if (await isDuplicateOrder(prisma, underlying, shortStrike, longStrike, expiry)) {
-    throw new Error(`Duplicate entry order detected: ${underlying} ${expiry} ${shortStrike}/${longStrike}`);
+  if (await isDuplicateOrder(prisma, underlying)) {
+    throw new Error(`Duplicate entry order detected: ${underlying} already has a same-day ENTRY (attempted ${expiry} ${shortStrike}/${longStrike})`);
   }
 
   const expiryDate = expiryToDate(expiry);
