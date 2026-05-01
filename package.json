@@ -33,6 +33,7 @@
     "walk-forward:credit-spread": "tsx scripts/walk-forward/walk-forward-us-credit-spread.ts",
     "walk-forward:vix-contango": "tsx scripts/walk-forward/walk-forward-us-vix-contango.ts",
     "walk-forward:dual-momentum": "tsx scripts/walk-forward/walk-forward-us-dual-momentum.ts",
+    "walk-forward:monthly": "tsx scripts/walk-forward/run-monthly-evaluation.ts",
     "paper-trading:weekly-report": "tsx src/paper-trading/weekly-report.ts"
   },
   "devDependencies": {

@@ -15,6 +15,11 @@ import {
 } from "../../src/backtest/us/us-vix-contango-config";
 import type { USVixContangoBacktestConfig } from "../../src/backtest/us/us-vix-contango-types";
 import type { PerformanceMetrics } from "../../src/backtest/types";
+import {
+  summarizeWFResults,
+  emitJsonSummary,
+  isJsonMode,
+} from "./lib/wf-summary";
 
 const IS_MONTHS = 6;
 const OOS_MONTHS = 3;
@@ -163,7 +168,17 @@ async function main() {
     console.log(`  最適パラメータ: ve=${bestParams.vixEntryUpperBound}, vx=${bestParams.vixExitUpperBound}, sl=${bestParams.stopLossPct}\n`);
   }
 
-  printSummary(results);
+  if (isJsonMode()) {
+    const summary = summarizeWFResults("us-vix-contango", results, {
+      isMonths: IS_MONTHS,
+      oosMonths: OOS_MONTHS,
+      slideMonths: SLIDE_MONTHS,
+      numWindows: NUM_WINDOWS,
+    });
+    emitJsonSummary(summary);
+  } else {
+    printSummary(results);
+  }
   await prisma.$disconnect();
 }
 

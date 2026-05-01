@@ -16,6 +16,11 @@ import {
 } from "../../src/backtest/us/us-dual-momentum-config";
 import type { USDualMomentumBacktestConfig } from "../../src/backtest/us/us-dual-momentum-types";
 import type { PerformanceMetrics } from "../../src/backtest/types";
+import {
+  summarizeWFResults,
+  emitJsonSummary,
+  isJsonMode,
+} from "./lib/wf-summary";
 
 const IS_MONTHS = 12;
 const OOS_MONTHS = 6;
@@ -162,7 +167,17 @@ async function main() {
     console.log(`  最適パラメータ: lb=${bestParams.lookbackDays}d, rb=${bestParams.rebalanceDays}d, at=${bestParams.absoluteMomentumThreshold}%\n`);
   }
 
-  printSummary(results);
+  if (isJsonMode()) {
+    const summary = summarizeWFResults("us-dual-momentum", results, {
+      isMonths: IS_MONTHS,
+      oosMonths: OOS_MONTHS,
+      slideMonths: SLIDE_MONTHS,
+      numWindows: NUM_WINDOWS,
+    });
+    emitJsonSummary(summary);
+  } else {
+    printSummary(results);
+  }
   await prisma.$disconnect();
 }
 

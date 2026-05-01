@@ -20,6 +20,11 @@ import {
 } from "../../src/backtest/us/us-credit-spread-config";
 import type { USCreditSpreadBacktestConfig } from "../../src/backtest/us/us-credit-spread-types";
 import type { PerformanceMetrics } from "../../src/backtest/types";
+import {
+  summarizeWFResults,
+  emitJsonSummary,
+  isJsonMode,
+} from "./lib/wf-summary";
 
 const IS_MONTHS = 6;
 const OOS_MONTHS = 3;
@@ -210,7 +215,17 @@ async function main() {
     console.log(`  最適パラメータ: shortPutDelta=${bestParams.shortPutDelta}, dte=${bestParams.dte}, profitTarget=${bestParams.profitTarget}\n`);
   }
 
-  printSummary(results);
+  if (isJsonMode()) {
+    const summary = summarizeWFResults("us-credit-spread", results, {
+      isMonths: IS_MONTHS,
+      oosMonths: OOS_MONTHS,
+      slideMonths: SLIDE_MONTHS,
+      numWindows: NUM_WINDOWS,
+    });
+    emitJsonSummary(summary);
+  } else {
+    printSummary(results);
+  }
   await prisma.$disconnect();
 }
 
