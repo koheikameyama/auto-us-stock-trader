@@ -23,13 +23,16 @@ export async function sendSlack(msg: SlackMessage): Promise<void> {
         : msg.level === "warn"
           ? "⚠️ "
           : "✅ ";
+  // トップレベル text は通知センター/モバイル push のプレビュー用に短くする。
+  // 本文（multi-line）は attachments[].text のみに置く（ここで両方フルにすると Slack が二重に表示する）。
+  const previewLine = msg.text.split("\n")[0].replace(/\*/g, "");
   try {
     await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        text: prefix + msg.text,
-        attachments: [{ color: COLOR[msg.level], text: msg.text }],
+        text: prefix + previewLine,
+        attachments: [{ color: COLOR[msg.level], text: msg.text, mrkdwn_in: ["text"] }],
       }),
     });
   } catch {
