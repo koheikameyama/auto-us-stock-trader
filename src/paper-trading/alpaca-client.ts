@@ -20,6 +20,10 @@ export interface AlpacaClientConfig {
   /** Market-data API base (no trailing version). default: https://data.alpaca.markets */
   dataUrl?: string;
   fetchTimeoutMs?: number;
+  /** Order-fill polling timeout (default 5 min). Override for tests. */
+  pollTimeoutMs?: number;
+  /** Initial poll interval (default 1 s). Override for tests. */
+  pollIntervalMs?: number;
 }
 
 export interface AccountSummary {
@@ -96,6 +100,27 @@ export interface OrderResult {
   message?: string;
 }
 
+export interface OpenOrderLeg {
+  /** OCC symbol (for option legs) or stock ticker. */
+  symbol: string;
+  side: "buy" | "sell";
+  positionIntent?:
+    | "buy_to_open"
+    | "sell_to_open"
+    | "buy_to_close"
+    | "sell_to_close";
+}
+
+export interface OpenOrder {
+  id: string;
+  /** Empty string for multi-leg parent orders; populated for simple orders. */
+  symbol: string;
+  orderClass: string;        // "mleg" | "simple" | "bracket" | ...
+  status: string;            // "new" | "accepted" | "partially_filled" | ...
+  submittedAt: string;       // ISO timestamp
+  legs: OpenOrderLeg[];
+}
+
 const DEFAULT_DATA_URL = "https://data.alpaca.markets";
 
 interface FetchOpts {
@@ -119,6 +144,8 @@ export class AlpacaClient {
       baseUrl: config.baseUrl.replace(/\/+$/, ""),
       dataUrl: (config.dataUrl ?? DEFAULT_DATA_URL).replace(/\/+$/, ""),
       fetchTimeoutMs: config.fetchTimeoutMs ?? 10_000,
+      pollTimeoutMs: config.pollTimeoutMs ?? 5 * 60 * 1000,
+      pollIntervalMs: config.pollIntervalMs ?? 1_000,
     };
   }
 
@@ -300,7 +327,34 @@ export class AlpacaClient {
       return { orderId: "", status: "REJECTED", message: msg };
     }
 
-    return await this.pollOrder(placed.id, 5 * 60 * 1000);
+    return await this.pollOrder(placed.id, this.config.pollTimeoutMs);
+  }
+
+  /** Cancel an open order. Idempotent: errors (already-terminal etc.) are surfaced to the caller. */
+  async cancelOrder(orderId: string): Promise<void> {
+    await this.request<void>(
+      `/orders/${encodeURIComponent(orderId)}`,
+      { method: "DELETE" },
+    );
+  }
+
+  /** List open (non-terminal) orders. Pass `symbols` to filter by underlying ticker. */
+  async getOpenOrders(opts?: { symbols?: string[] }): Promise<OpenOrder[]> {
+    const params = new URLSearchParams({ status: "open", direction: "desc", limit: "100", nested: "true" });
+    if (opts?.symbols?.length) params.set("symbols", opts.symbols.join(","));
+    const raw = await this.request<RawOrder[]>(`/orders?${params.toString()}`);
+    return raw.map((r) => ({
+      id: r.id,
+      symbol: r.symbol ?? "",
+      orderClass: r.order_class ?? "",
+      status: r.status,
+      submittedAt: r.submitted_at ?? "",
+      legs: (r.legs ?? []).map((l) => ({
+        symbol: l.symbol,
+        side: l.side,
+        positionIntent: l.position_intent,
+      })),
+    }));
   }
 
   private async pollOrder(
@@ -308,7 +362,7 @@ export class AlpacaClient {
     timeoutMs: number,
   ): Promise<OrderResult> {
     const start = Date.now();
-    let intervalMs = 1_000;
+    let intervalMs = this.config.pollIntervalMs;
     while (Date.now() - start < timeoutMs) {
       const order = await this.request<RawOrder>(
         `/orders/${encodeURIComponent(orderId)}`,
@@ -329,10 +383,20 @@ export class AlpacaClient {
       await sleep(intervalMs);
       intervalMs = Math.min(intervalMs * 2, 5_000);
     }
+    // Timed out without reaching a terminal state. Best-effort cancel so the
+    // resting order does not survive into the next daily cycle and cause a
+    // duplicate entry. Cancel failures (already filled, already canceled) are
+    // intentionally swallowed — the caller treats this as TIMEOUT either way.
+    let cancelMessage = "Order fill confirmation timed out (5 min); cancel attempted";
+    try {
+      await this.cancelOrder(orderId);
+    } catch (e) {
+      cancelMessage = `Order fill confirmation timed out (5 min); cancel failed: ${e instanceof Error ? e.message : String(e)}`;
+    }
     return {
       orderId,
       status: "TIMEOUT",
-      message: "Order fill confirmation timed out (5 min)",
+      message: cancelMessage,
     };
   }
 
@@ -444,4 +508,16 @@ interface RawOrder {
   id: string;
   status: string;
   filled_avg_price?: string | null;
+  symbol?: string;
+  order_class?: string;
+  submitted_at?: string;
+  legs?: Array<{
+    symbol: string;
+    side: "buy" | "sell";
+    position_intent?:
+      | "buy_to_open"
+      | "sell_to_open"
+      | "buy_to_close"
+      | "sell_to_close";
+  }>;
 }

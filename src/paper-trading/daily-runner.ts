@@ -214,6 +214,22 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
 
   let openPositionCount = await prisma.position.count({ where: { state: "OPEN" } });
 
+  // Broker 側で alive な ENTRY 注文（=未約定の sell_to_open を含む mleg）も
+  // capacity を消費しているとみなして count に加算する。これがないと、
+  // 約定確認できなかった注文が resting しているのに次サイクルで「ポジション 0」
+  // と判定されて二重発注される（KOH-466）。
+  const pendingBrokerEntries = await withRetry(
+    () => alpaca.getOpenOrders({ symbols: ["SPY"] }),
+    { retries: 3, intervalMs: 5_000 },
+  );
+  const pendingEntryCount = pendingBrokerEntries.filter(
+    (o) => o.orderClass === "mleg" && o.legs.some((l) => l.positionIntent === "sell_to_open"),
+  ).length;
+  if (pendingEntryCount > 0) {
+    console.log(`  Broker pending ENTRY orders: ${pendingEntryCount} (counted toward capacity)`);
+  }
+  openPositionCount += pendingEntryCount;
+
   // ── 6. equity 計算 + DD stop 状態遷移 ──
   const netLiq = accountSummary.netLiquidation;
   const positionsValue = 0;
