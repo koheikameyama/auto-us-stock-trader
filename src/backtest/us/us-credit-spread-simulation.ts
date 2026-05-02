@@ -23,9 +23,27 @@ import { calcDDStopState, type DDStopPrevState } from "../credit-spread/dd-stop"
 import { evaluateSpread } from "../credit-spread/spread-evaluator";
 import { generateEntrySignal } from "../credit-spread/signal-generator";
 import { calculateMetrics } from "../metrics";
-import type { USCreditSpreadBacktestConfig, USCreditSpreadBacktestResult, SimulatedSpread, CreditSpreadPerformanceMetrics } from "./us-credit-spread-types";
+import type {
+  USCreditSpreadBacktestConfig,
+  USCreditSpreadBacktestResult,
+  SimulatedSpread,
+  CreditSpreadPerformanceMetrics,
+  EventSkippedEntry,
+} from "./us-credit-spread-types";
 import type { SimulatedPosition, DailyEquity } from "../types";
 import type { RegimeMap } from "./regime-fetcher";
+import {
+  nearestEvent,
+  type EventCalendar,
+  type EventType,
+} from "./event-fetcher";
+
+export interface EventAwareConfig {
+  /** ±N 日のイベント近接で entry を skip する */
+  windowDays: number;
+  /** どの eventType を skip 対象にするか（通常は ["FOMC"] / ["FOMC","CPI"] 等） */
+  skipTypes: EventType[];
+}
 
 const CONTRACT_SIZE = 100;
 
@@ -70,6 +88,8 @@ export async function runUSCreditSpreadBacktest(
   gspcData: Map<string, number>,
   vixData: Map<string, number>,
   regimeData?: RegimeMap,
+  eventCalendar?: EventCalendar,
+  eventAware?: EventAwareConfig,
 ): Promise<USCreditSpreadBacktestResult> {
   // tradingDays: ^GSPC のある日付セット
   const tradingDays = [...gspcData.keys()]
@@ -99,6 +119,7 @@ export async function runUSCreditSpreadBacktest(
   const openSpreads: SimulatedSpread[] = [];
   const closedSpreads: SimulatedSpread[] = [];
   const equityCurve: DailyEquity[] = [];
+  const eventSkips: EventSkippedEntry[] = [];
 
   for (const today of tradingDays) {
     const gspc = gspcData.get(today);
@@ -194,37 +215,52 @@ export async function runUSCreditSpreadBacktest(
     });
 
     if (signal.reason === "ENTERED") {
-      // Regime filter: 当日の RegimeSignal で contracts をスケール（fail-safe で multiplier=1.0）
-      const regimeRecord = regimeData?.get(today);
-      const multiplier = regimeRecord?.multiplier ?? 1.0;
-      const regimeState = regimeRecord?.state ?? null;
-      const finalContracts = Math.floor(config.contractsPerSpread * multiplier);
-
-      if (finalContracts > 0) {
-        const collateralRequired = config.spreadWidth * CONTRACT_SIZE * finalContracts;
-        const entryCommission = config.optionsCommission * 2 * finalContracts;
-        cash -= collateralRequired;
-        cash += signal.estimatedCredit * CONTRACT_SIZE * finalContracts;
-        cash -= entryCommission;
-
-        const newSpread: SimulatedSpread = {
-          underlyingSymbol: config.underlyingSymbol,
-          entryDate: today,
-          expirationDate: signal.expirationDate,
-          entrySpotPrice: spotSpy,
-          entryIV: iv,
-          shortStrike: signal.shortStrike,
-          longStrike: signal.longStrike,
-          shortDeltaAtEntry: signal.shortDelta,
-          creditReceived: signal.estimatedCredit,
-          contracts: finalContracts,
-          state: "OPEN",
-          totalCommissions: entryCommission,
-          regime: regimeState,
-        };
-        openSpreads.push(newSpread);
+      // Event-aware filter: ±window 日に対象イベント（FOMC等）があれば skip
+      let eventHit: { eventType: string; daysAway: number } | null = null;
+      if (eventCalendar && eventAware && eventAware.skipTypes.length > 0) {
+        const hit = nearestEvent(eventCalendar, today, eventAware.windowDays);
+        if (hit && eventAware.skipTypes.includes(hit.eventType)) {
+          eventHit = { eventType: hit.eventType, daysAway: hit.daysAway };
+        }
       }
-      // finalContracts <= 0 (RISK_OFF) の場合は entry skip（cash も spread も追加しない）
+
+      if (eventHit) {
+        eventSkips.push({ date: today, ...eventHit });
+        // skip: cash も spread も追加しない
+      } else {
+        // Regime filter: 当日の RegimeSignal で contracts をスケール（fail-safe で multiplier=1.0）
+        const regimeRecord = regimeData?.get(today);
+        const multiplier = regimeRecord?.multiplier ?? 1.0;
+        const regimeState = regimeRecord?.state ?? null;
+        const finalContracts = Math.floor(config.contractsPerSpread * multiplier);
+
+        if (finalContracts > 0) {
+          const collateralRequired = config.spreadWidth * CONTRACT_SIZE * finalContracts;
+          const entryCommission = config.optionsCommission * 2 * finalContracts;
+          cash -= collateralRequired;
+          cash += signal.estimatedCredit * CONTRACT_SIZE * finalContracts;
+          cash -= entryCommission;
+
+          const newSpread: SimulatedSpread = {
+            underlyingSymbol: config.underlyingSymbol,
+            entryDate: today,
+            expirationDate: signal.expirationDate,
+            entrySpotPrice: spotSpy,
+            entryIV: iv,
+            shortStrike: signal.shortStrike,
+            longStrike: signal.longStrike,
+            shortDeltaAtEntry: signal.shortDelta,
+            creditReceived: signal.estimatedCredit,
+            contracts: finalContracts,
+            state: "OPEN",
+            totalCommissions: entryCommission,
+            regime: regimeState,
+            eventProximity: null,
+          };
+          openSpreads.push(newSpread);
+        }
+        // finalContracts <= 0 (RISK_OFF) の場合は entry skip（cash も spread も追加しない）
+      }
     }
 
     // ── 3. equity curve 計算 ──
@@ -324,5 +360,5 @@ export async function runUSCreditSpreadBacktest(
     avgHoldingDays: avgHolding,
   };
 
-  return { config, spreads: allSpreads, equityCurve, metrics };
+  return { config, spreads: allSpreads, equityCurve, metrics, eventSkips };
 }

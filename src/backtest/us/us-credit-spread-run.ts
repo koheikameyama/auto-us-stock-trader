@@ -11,7 +11,17 @@ import { US_CREDIT_SPREAD_DEFAULTS } from "./us-credit-spread-config";
 import { runUSCreditSpreadBacktest } from "./us-credit-spread-simulation";
 import { fetchSP500FromDB, fetchVixFromDB } from "./us-data-fetcher";
 import { fetchRegimeFromDB } from "./regime-fetcher";
+import { fetchEventsFromDB, type EventType } from "./event-fetcher";
 import type { USCreditSpreadBacktestConfig } from "./us-credit-spread-types";
+
+const VALID_EVENT_TYPES: EventType[] = ["FOMC", "CPI", "NFP", "PPI"];
+
+function parseEventTypes(raw: string): EventType[] {
+  return raw
+    .split(",")
+    .map((s) => s.trim().toUpperCase())
+    .filter((s): s is EventType => (VALID_EVENT_TYPES as string[]).includes(s));
+}
 
 async function main() {
   const args = process.argv.slice(2);
@@ -24,6 +34,9 @@ async function main() {
   const startDate = getArg("start") ?? dayjs(endDate).subtract(24, "month").format("YYYY-MM-DD");
   const verbose = args.includes("--verbose");
   const useRegime = args.includes("--use-regime");
+  const eventAwareEnabled = args.includes("--event-aware");
+  const eventWindow = getArg("event-window") ? Number(getArg("event-window")) : 1;
+  const eventSkipTypes = parseEventTypes(getArg("event-skip-types") ?? "FOMC");
   const budget = getArg("budget") ? Number(getArg("budget")) : US_CREDIT_SPREAD_DEFAULTS.initialBudget;
   const dte = getArg("dte") ? Number(getArg("dte")) : US_CREDIT_SPREAD_DEFAULTS.dte;
   const shortDelta = getArg("short-delta") ? Number(getArg("short-delta")) : US_CREDIT_SPREAD_DEFAULTS.shortPutDelta;
@@ -53,6 +66,13 @@ async function main() {
   console.log(`Max Positions: ${config.maxPositions} | Contracts/Spread: ${config.contractsPerSpread}`);
   console.log(`VIX cap: ${config.vixCap} | Index trend SMA: ${config.indexTrendSmaPeriod}`);
   console.log(`Regime filter: ${useRegime ? "ON (RISK_OFF=skip, NEUTRAL=1x, RISK_ON=1.5x)" : "OFF"}`);
+  console.log(
+    `Event-aware filter: ${
+      eventAwareEnabled
+        ? `ON (skip ±${eventWindow}d around ${eventSkipTypes.join(",")})`
+        : "OFF"
+    }`,
+  );
 
   console.log("\nLoading data...");
   const gspcData = await fetchSP500FromDB(startDate, endDate);
@@ -63,9 +83,30 @@ async function main() {
   if (regimeData) {
     console.log(`  RegimeSignal: ${regimeData.size} days`);
   }
+  // event-aware は window 分前後の event も拾うため、fetch 範囲を広げる
+  const eventCalendar = eventAwareEnabled
+    ? await fetchEventsFromDB(
+        dayjs(startDate).subtract(eventWindow + 5, "day").format("YYYY-MM-DD"),
+        dayjs(endDate).add(eventWindow + 5, "day").format("YYYY-MM-DD"),
+        eventSkipTypes,
+      )
+    : undefined;
+  if (eventCalendar) {
+    const totalEvents = [...eventCalendar.values()].reduce((s, list) => s + list.length, 0);
+    console.log(`  MacroEvent: ${totalEvents} events (${eventCalendar.size} unique dates)`);
+  }
 
   console.log("\nRunning backtest...");
-  const result = await runUSCreditSpreadBacktest(config, gspcData, vixData, regimeData);
+  const result = await runUSCreditSpreadBacktest(
+    config,
+    gspcData,
+    vixData,
+    regimeData,
+    eventCalendar,
+    eventAwareEnabled
+      ? { windowDays: eventWindow, skipTypes: eventSkipTypes }
+      : undefined,
+  );
   const m = result.metrics;
 
   console.log("\n" + "=".repeat(60));
@@ -118,6 +159,31 @@ async function main() {
             `winRate=${winRate.toFixed(2).padStart(6)}% | ` +
             `netPnl=$${s.netPnl.toFixed(2).padStart(10)} | avgNet=$${avgNet.toFixed(2)}`,
         );
+      }
+    }
+  }
+
+  if (eventAwareEnabled) {
+    const skips = result.eventSkips;
+    console.log("\n" + "=".repeat(60));
+    console.log("Per-Event Skip Breakdown");
+    console.log("=".repeat(60));
+    if (skips.length === 0) {
+      console.log("  (no entries skipped — try widening --event-window)");
+    } else {
+      const byType: Record<string, number> = {};
+      for (const s of skips) byType[s.eventType] = (byType[s.eventType] ?? 0) + 1;
+      const sortedTypes = Object.keys(byType).sort();
+      for (const t of sortedTypes) {
+        console.log(`  ${t.padEnd(6)} skips=${String(byType[t]).padStart(4)}`);
+      }
+      console.log(`  ${"TOTAL".padEnd(6)} skips=${String(skips.length).padStart(4)}`);
+      if (verbose) {
+        console.log("\n  Skipped entries (last 30):");
+        for (const s of skips.slice(-30)) {
+          const sign = s.daysAway > 0 ? "+" : "";
+          console.log(`    ${s.date}  ${s.eventType.padEnd(6)} daysAway=${sign}${s.daysAway}`);
+        }
       }
     }
   }

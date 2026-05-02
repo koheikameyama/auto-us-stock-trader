@@ -1,0 +1,58 @@
+date,eventType,description
+2020-01-29,FOMC,FOMC meeting (Jan 28-29)
+2020-03-03,FOMC,FOMC emergency rate cut
+2020-03-15,FOMC,FOMC emergency rate cut to 0%
+2020-04-29,FOMC,FOMC meeting (Apr 28-29)
+2020-06-10,FOMC,FOMC meeting (Jun 9-10) + SEP
+2020-07-29,FOMC,FOMC meeting (Jul 28-29)
+2020-09-16,FOMC,FOMC meeting (Sep 15-16) + SEP
+2020-11-05,FOMC,FOMC meeting (Nov 4-5)
+2020-12-16,FOMC,FOMC meeting (Dec 15-16) + SEP
+2021-01-27,FOMC,FOMC meeting (Jan 26-27)
+2021-03-17,FOMC,FOMC meeting (Mar 16-17) + SEP
+2021-04-28,FOMC,FOMC meeting (Apr 27-28)
+2021-06-16,FOMC,FOMC meeting (Jun 15-16) + SEP
+2021-07-28,FOMC,FOMC meeting (Jul 27-28)
+2021-09-22,FOMC,FOMC meeting (Sep 21-22) + SEP
+2021-11-03,FOMC,FOMC meeting (Nov 2-3)
+2021-12-15,FOMC,FOMC meeting (Dec 14-15) + SEP
+2022-01-26,FOMC,FOMC meeting (Jan 25-26)
+2022-03-16,FOMC,FOMC meeting (Mar 15-16) + SEP - first hike
+2022-05-04,FOMC,FOMC meeting (May 3-4) - 50bp hike
+2022-06-15,FOMC,FOMC meeting (Jun 14-15) + SEP - 75bp hike
+2022-07-27,FOMC,FOMC meeting (Jul 26-27) - 75bp hike
+2022-09-21,FOMC,FOMC meeting (Sep 20-21) + SEP - 75bp hike
+2022-11-02,FOMC,FOMC meeting (Nov 1-2) - 75bp hike
+2022-12-14,FOMC,FOMC meeting (Dec 13-14) + SEP - 50bp hike
+2023-02-01,FOMC,FOMC meeting (Jan 31-Feb 1) - 25bp hike
+2023-03-22,FOMC,FOMC meeting (Mar 21-22) + SEP - 25bp hike
+2023-05-03,FOMC,FOMC meeting (May 2-3) - 25bp hike
+2023-06-14,FOMC,FOMC meeting (Jun 13-14) + SEP - hold
+2023-07-26,FOMC,FOMC meeting (Jul 25-26) - 25bp hike
+2023-09-20,FOMC,FOMC meeting (Sep 19-20) + SEP - hold
+2023-11-01,FOMC,FOMC meeting (Oct 31-Nov 1) - hold
+2023-12-13,FOMC,FOMC meeting (Dec 12-13) + SEP - hold
+2024-01-31,FOMC,FOMC meeting (Jan 30-31) - hold
+2024-03-20,FOMC,FOMC meeting (Mar 19-20) + SEP - hold
+2024-05-01,FOMC,FOMC meeting (Apr 30-May 1) - hold
+2024-06-12,FOMC,FOMC meeting (Jun 11-12) + SEP - hold
+2024-07-31,FOMC,FOMC meeting (Jul 30-31) - hold
+2024-09-18,FOMC,FOMC meeting (Sep 17-18) + SEP - 50bp cut
+2024-11-07,FOMC,FOMC meeting (Nov 6-7) - 25bp cut
+2024-12-18,FOMC,FOMC meeting (Dec 17-18) + SEP - 25bp cut
+2025-01-29,FOMC,FOMC meeting (Jan 28-29) - hold
+2025-03-19,FOMC,FOMC meeting (Mar 18-19) + SEP
+2025-04-30,FOMC,FOMC meeting (Apr 29-30)
+2025-06-18,FOMC,FOMC meeting (Jun 17-18) + SEP
+2025-07-30,FOMC,FOMC meeting (Jul 29-30)
+2025-09-17,FOMC,FOMC meeting (Sep 16-17) + SEP
+2025-10-29,FOMC,FOMC meeting (Oct 28-29)
+2025-12-10,FOMC,FOMC meeting (Dec 9-10) + SEP
+2026-01-28,FOMC,FOMC meeting (Jan 27-28)
+2026-03-18,FOMC,FOMC meeting (Mar 17-18) + SEP
+2026-04-29,FOMC,FOMC meeting (Apr 28-29)
+2026-06-17,FOMC,FOMC meeting (Jun 16-17) + SEP
+2026-07-29,FOMC,FOMC meeting (Jul 28-29)
+2026-09-16,FOMC,FOMC meeting (Sep 15-16) + SEP
+2026-10-28,FOMC,FOMC meeting (Oct 27-28)
+2026-12-09,FOMC,FOMC meeting (Dec 8-9) + SEP
