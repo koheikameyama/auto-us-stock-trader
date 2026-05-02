@@ -1,0 +1,64 @@
+name: DB Migrate Deploy
+
+# main に prisma/migrations/** の変更が push された時点で本番 DB に migration を自動適用する。
+# workflow_dispatch でも手動実行可。
+#
+# 前提: _prisma_migrations 履歴が正しい状態であること。初回 baseline は regime-init.yml で実施済み。
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "prisma/migrations/**"
+      - "prisma/schema.prisma"
+  workflow_dispatch: {}
+
+jobs:
+  migrate-deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Show migration status
+        run: npx prisma migrate status || true
+
+      - name: Apply Prisma migrations
+        run: npx prisma migrate deploy
+
+      - name: Notify Slack on success
+        if: success()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_TITLE: "✅ DB Migrate Deploy 成功"
+          SLACK_MESSAGE: |
+            commit: ${{ github.sha }}
+            ref: ${{ github.ref }}
+          SLACK_COLOR: good
+          SLACK_FOOTER: "auto-us-stock-trader"
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_TITLE: "❌ DB Migrate Deploy 失敗"
+          SLACK_MESSAGE: |
+            本番 DB への migration 適用でエラーが発生しました。
+            詳細は GitHub Actions ログを確認してください。
+            commit: ${{ github.sha }}
+          SLACK_COLOR: danger
+          SLACK_FOOTER: "auto-us-stock-trader"
