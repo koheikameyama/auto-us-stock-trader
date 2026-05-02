@@ -1,6 +1,11 @@
 """
-Dual Momentum 用ETFバックフィル: SPY (米株), EFA (海外株), AGG (米国総合債券)
-Antonacci 古典的 GEM (Global Equities Momentum) 構成
+GEM Dual Momentum + Sector Rotation 用 ETF バックフィル
+
+含まれる ETF:
+- GEM (Antonacci Global Equities Momentum): SPY, EFA, AGG
+- 補助マクロ ETF: QQQ, IWM, TLT, GLD, BND
+- 11 SPDR セクター ETF: XLK, XLF, XLE, XLV, XLY, XLP, XLI, XLB, XLU, XLRE, XLC
+  （XLRE は 2015 年〜、XLC は 2018 年〜のみ取得可能）
 
 Usage:
   python scripts/data/backfill_rotation_etfs.py                                    # 直近10年（デフォルト）
@@ -20,12 +25,19 @@ from lib.db import get_database_url
 
 DATABASE_URL = get_database_url()
 
-DEFAULT_TICKERS = ["SPY", "EFA", "AGG", "QQQ", "IWM", "TLT", "GLD", "BND"]
+DEFAULT_TICKERS = [
+    # GEM Dual Momentum
+    "SPY", "EFA", "AGG",
+    # 補助マクロ ETF
+    "QQQ", "IWM", "TLT", "GLD", "BND",
+    # 11 SPDR セクター ETF（Sector Rotation / Risk-on/off レジームフィルター用）
+    "XLK", "XLF", "XLE", "XLV", "XLY", "XLP", "XLI", "XLB", "XLU", "XLRE", "XLC",
+]
 PERIOD = "10y"
 
-parser = argparse.ArgumentParser(description="Dual Momentum 用 ETF backfill")
+parser = argparse.ArgumentParser(description="GEM Dual Momentum + Sector Rotation 用 ETF backfill")
 parser.add_argument("--start", default=None, help="開始日 YYYY-MM-DD（指定時は PERIOD を上書き）")
-parser.add_argument("--tickers", default=None, help="カンマ区切り銘柄リスト（デフォルト: SPY,EFA,AGG,QQQ,IWM,TLT,GLD,BND）")
+parser.add_argument("--tickers", default=None, help=f"カンマ区切り銘柄リスト（デフォルト: {','.join(['SPY','EFA','AGG','QQQ','IWM','TLT','GLD','BND','XLK','XLF','XLE','XLV','XLY','XLP','XLI','XLB','XLU','XLRE','XLC'])}）")
 args = parser.parse_args()
 
 TICKERS = [t.strip() for t in args.tickers.split(",")] if args.tickers else DEFAULT_TICKERS
