@@ -1,0 +1,53 @@
+name: Macro Events Seed (one-time / refresh)
+
+# 用途: data/macro_events.csv を本番 MacroEvent テーブルに UPSERT する。
+# 初回 seed および CSV を更新したときに手動実行する。
+# CSV に upsert key (date, eventType) で衝突した行は description だけ更新される。
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  seed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Seed MacroEvent
+        run: python scripts/data/seed_macro_events.py
+
+      - name: Notify Slack on success
+        if: success()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_TITLE: "✅ MacroEvent Seed 成功"
+          SLACK_MESSAGE: |
+            data/macro_events.csv の MacroEvent テーブルへの UPSERT が完了しました。
+          SLACK_COLOR: good
+          SLACK_FOOTER: "auto-us-stock-trader"
+
+      - name: Notify Slack on failure
+        if: failure()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_TITLE: "❌ MacroEvent Seed 失敗"
+          SLACK_MESSAGE: |
+            MacroEvent の seed 投入でエラーが発生しました。
+            詳細は GitHub Actions ログを確認してください。
+          SLACK_COLOR: danger
+          SLACK_FOOTER: "auto-us-stock-trader"

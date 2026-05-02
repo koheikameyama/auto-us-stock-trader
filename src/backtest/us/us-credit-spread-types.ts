@@ -93,6 +93,24 @@ export interface SimulatedSpread {
   totalCommissions: number;
   /** entry 時の Risk-on/off レジーム（regime filter 有効時のみ） */
   regime?: string | null;
+  /**
+   * entry 時のイベント近接（event-aware filter 有効時のみ）。
+   * 例: { eventType: "FOMC", daysAway: 1 } = 翌日 FOMC のため進行中エントリー。
+   * skip された場合は SimulatedSpread 自体が生成されないので、ここに値が入るのは
+   * 「event 近傍だが skipTypes に含まれず通過した」ケース。
+   */
+  eventProximity?: { eventType: string; daysAway: number } | null;
+}
+
+/**
+ * event-aware filter で skip された entry の記録（バックテストレポート用）。
+ * SimulatedSpread としては生成されない（cash 影響なし）が、
+ * 「どのイベントで何日 skip したか」を集計可能にする。
+ */
+export interface EventSkippedEntry {
+  date: string;
+  eventType: string;
+  daysAway: number;
 }
 
 export interface CreditSpreadPerformanceMetrics extends PerformanceMetrics {
@@ -118,4 +136,6 @@ export interface USCreditSpreadBacktestResult {
   spreads: SimulatedSpread[];
   equityCurve: DailyEquity[];
   metrics: CreditSpreadPerformanceMetrics;
+  /** event-aware filter 有効時に skip された entry の一覧（無効時は空配列） */
+  eventSkips: EventSkippedEntry[];
 }
