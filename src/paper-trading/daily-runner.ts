@@ -27,6 +27,7 @@ import { US_CREDIT_SPREAD_DEFAULTS } from "../backtest/us/us-credit-spread-confi
 import type { SimulatedSpread } from "../backtest/us/us-credit-spread-types";
 import { fetchIndexFromDB } from "../backtest/data-fetcher";
 import { placeNewSpreadOrder, closeSpreadOrder, expirePosition } from "./order-manager";
+import { getRegimeMultiplier, scaleContracts } from "./regime-multiplier";
 import {
   sendSlack,
   formatEntrySuccess, formatCloseSuccess, formatExpire,
@@ -287,6 +288,15 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
     config: { ...US_CREDIT_SPREAD_DEFAULTS, startDate: today, endDate: today },
   });
 
+  // Regime filter: 当日の Risk-on/off レジームに応じて発注サイズを調整
+  const regime = await getRegimeMultiplier(prisma, today);
+  const baseContracts = US_CREDIT_SPREAD_DEFAULTS.contractsPerSpread;
+  const finalContracts = scaleContracts(baseContracts, regime.multiplier);
+  console.log(
+    `Regime: state=${regime.state ?? "(none)"}, multiplier=${regime.multiplier}, ` +
+      `contracts ${baseContracts} -> ${finalContracts}`,
+  );
+
   console.log(`Entry signal: ${signal.reason}`);
   await prisma.signalLog.create({
     data: {
@@ -299,6 +309,10 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
         sma50,
         gspc,
         ddStopActive: ddState.ddStopActive,
+        regimeState: regime.state,
+        regimeMultiplier: regime.multiplier,
+        baseContracts,
+        finalContracts,
         ...(signal.reason === "ENTERED" ? {
           shortStrike: signal.shortStrike,
           longStrike: signal.longStrike,
@@ -309,8 +323,26 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
     },
   });
 
-  if (signal.reason === "ENTERED") {
-    console.log(`Placing order: SPY ${signal.expirationDate} P ${signal.shortStrike}/${signal.longStrike}, credit ~$${signal.estimatedCredit.toFixed(2)}`);
+  if (signal.reason === "ENTERED" && finalContracts <= 0) {
+    console.log(
+      `Skipping entry: regime ${regime.state} reduced contracts to ${finalContracts}`,
+    );
+    await prisma.signalLog.create({
+      data: {
+        date: new Date(today),
+        signalType: "REGIME_SKIP",
+        reason: regime.state ?? "REGIME_UNKNOWN",
+        details: {
+          baseContracts,
+          finalContracts,
+          regimeMultiplier: regime.multiplier,
+          shortStrike: signal.shortStrike,
+          longStrike: signal.longStrike,
+        },
+      },
+    });
+  } else if (signal.reason === "ENTERED") {
+    console.log(`Placing order: SPY ${signal.expirationDate} P ${signal.shortStrike}/${signal.longStrike}, credit ~$${signal.estimatedCredit.toFixed(2)}, contracts=${finalContracts}`);
     const expiryYYYYMMDD = signal.expirationDate.replace(/-/g, "");
     try {
       const placed = await placeNewSpreadOrder(
@@ -321,7 +353,7 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
           shortStrike: signal.shortStrike,
           longStrike: signal.longStrike,
           expiry: expiryYYYYMMDD,
-          contracts: US_CREDIT_SPREAD_DEFAULTS.contractsPerSpread,
+          contracts: finalContracts,
           estimatedCredit: signal.estimatedCredit,
         },
         { dryRun },
