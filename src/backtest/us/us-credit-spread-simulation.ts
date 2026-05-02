@@ -25,6 +25,7 @@ import { generateEntrySignal } from "../credit-spread/signal-generator";
 import { calculateMetrics } from "../metrics";
 import type { USCreditSpreadBacktestConfig, USCreditSpreadBacktestResult, SimulatedSpread, CreditSpreadPerformanceMetrics } from "./us-credit-spread-types";
 import type { SimulatedPosition, DailyEquity } from "../types";
+import type { RegimeMap } from "./regime-fetcher";
 
 const CONTRACT_SIZE = 100;
 
@@ -68,6 +69,7 @@ export async function runUSCreditSpreadBacktest(
   config: USCreditSpreadBacktestConfig,
   gspcData: Map<string, number>,
   vixData: Map<string, number>,
+  regimeData?: RegimeMap,
 ): Promise<USCreditSpreadBacktestResult> {
   // tradingDays: ^GSPC のある日付セット
   const tradingDays = [...gspcData.keys()]
@@ -192,27 +194,37 @@ export async function runUSCreditSpreadBacktest(
     });
 
     if (signal.reason === "ENTERED") {
-      const collateralRequired = config.spreadWidth * CONTRACT_SIZE * config.contractsPerSpread;
-      const entryCommission = config.optionsCommission * 2 * config.contractsPerSpread;
-      cash -= collateralRequired;
-      cash += signal.estimatedCredit * CONTRACT_SIZE * config.contractsPerSpread;
-      cash -= entryCommission;
+      // Regime filter: 当日の RegimeSignal で contracts をスケール（fail-safe で multiplier=1.0）
+      const regimeRecord = regimeData?.get(today);
+      const multiplier = regimeRecord?.multiplier ?? 1.0;
+      const regimeState = regimeRecord?.state ?? null;
+      const finalContracts = Math.floor(config.contractsPerSpread * multiplier);
 
-      const newSpread: SimulatedSpread = {
-        underlyingSymbol: config.underlyingSymbol,
-        entryDate: today,
-        expirationDate: signal.expirationDate,
-        entrySpotPrice: spotSpy,
-        entryIV: iv,
-        shortStrike: signal.shortStrike,
-        longStrike: signal.longStrike,
-        shortDeltaAtEntry: signal.shortDelta,
-        creditReceived: signal.estimatedCredit,
-        contracts: config.contractsPerSpread,
-        state: "OPEN",
-        totalCommissions: entryCommission,
-      };
-      openSpreads.push(newSpread);
+      if (finalContracts > 0) {
+        const collateralRequired = config.spreadWidth * CONTRACT_SIZE * finalContracts;
+        const entryCommission = config.optionsCommission * 2 * finalContracts;
+        cash -= collateralRequired;
+        cash += signal.estimatedCredit * CONTRACT_SIZE * finalContracts;
+        cash -= entryCommission;
+
+        const newSpread: SimulatedSpread = {
+          underlyingSymbol: config.underlyingSymbol,
+          entryDate: today,
+          expirationDate: signal.expirationDate,
+          entrySpotPrice: spotSpy,
+          entryIV: iv,
+          shortStrike: signal.shortStrike,
+          longStrike: signal.longStrike,
+          shortDeltaAtEntry: signal.shortDelta,
+          creditReceived: signal.estimatedCredit,
+          contracts: finalContracts,
+          state: "OPEN",
+          totalCommissions: entryCommission,
+          regime: regimeState,
+        };
+        openSpreads.push(newSpread);
+      }
+      // finalContracts <= 0 (RISK_OFF) の場合は entry skip（cash も spread も追加しない）
     }
 
     // ── 3. equity curve 計算 ──
@@ -264,7 +276,7 @@ export async function runUSCreditSpreadBacktest(
       stopLossPrice: 0,
       quantity: sp.contracts,
       volumeSurgeRatio: 0,
-      regime: null,
+      regime: null, // VIX volatility regime（RegimeLevel）。Risk-on/off は別軸で result.spreads.regime に保持。
       maxHighDuringHold: sp.entrySpotPrice,
       minLowDuringHold: sp.entrySpotPrice,
       trailingStopPrice: null,

@@ -91,6 +91,8 @@ export interface SimulatedSpread {
   netPnl?: number;
   /** 全コミッション（往復、ドル） */
   totalCommissions: number;
+  /** entry 時の Risk-on/off レジーム（regime filter 有効時のみ） */
+  regime?: string | null;
 }
 
 export interface CreditSpreadPerformanceMetrics extends PerformanceMetrics {
