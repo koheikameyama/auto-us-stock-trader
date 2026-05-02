@@ -148,6 +148,28 @@ model SignalLog {
   @@schema("auto_us_stock_trader")
 }
 
+model RegimeSignal {
+  id              String   @id @default(cuid())
+  date            DateTime @db.Date  @unique
+  // XLY/XLP: Consumer Discretionary vs Staples
+  xlyXlpRatio     Float
+  xlyXlp50dma     Float
+  xlyXlpState     String   // "ON" | "OFF"
+  // XLK/XLU: Tech vs Utilities
+  xlkXluRatio     Float
+  xlkXlu50dma     Float
+  xlkXluState     String   // "ON" | "OFF"
+  // 統合判定
+  combinedState   String   // "RISK_ON" | "NEUTRAL" | "RISK_OFF"
+  sizeMultiplier  Float    // RISK_ON=1.5, NEUTRAL=1.0, RISK_OFF=0.5
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([date])
+  @@index([combinedState])
+  @@schema("auto_us_stock_trader")
+}
+
 model ErrorLog {
   id              String   @id @default(cuid())
   occurredAt      DateTime @default(now())

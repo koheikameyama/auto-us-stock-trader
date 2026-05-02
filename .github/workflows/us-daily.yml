@@ -41,6 +41,9 @@ jobs:
       - name: Backfill rotation ETFs
         run: python scripts/data/backfill_rotation_etfs.py
 
+      - name: Compute regime signal (Risk-on/off)
+        run: python scripts/regime/compute_regime.py
+
       - name: Get DB counts
         id: counts
         if: success()
