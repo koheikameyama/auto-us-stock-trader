@@ -10,6 +10,7 @@ import dayjs from "dayjs";
 import { US_CREDIT_SPREAD_DEFAULTS } from "./us-credit-spread-config";
 import { runUSCreditSpreadBacktest } from "./us-credit-spread-simulation";
 import { fetchSP500FromDB, fetchVixFromDB } from "./us-data-fetcher";
+import { fetchRegimeFromDB } from "./regime-fetcher";
 import type { USCreditSpreadBacktestConfig } from "./us-credit-spread-types";
 
 async function main() {
@@ -22,6 +23,7 @@ async function main() {
   const endDate = getArg("end") ?? dayjs().format("YYYY-MM-DD");
   const startDate = getArg("start") ?? dayjs(endDate).subtract(24, "month").format("YYYY-MM-DD");
   const verbose = args.includes("--verbose");
+  const useRegime = args.includes("--use-regime");
   const budget = getArg("budget") ? Number(getArg("budget")) : US_CREDIT_SPREAD_DEFAULTS.initialBudget;
   const dte = getArg("dte") ? Number(getArg("dte")) : US_CREDIT_SPREAD_DEFAULTS.dte;
   const shortDelta = getArg("short-delta") ? Number(getArg("short-delta")) : US_CREDIT_SPREAD_DEFAULTS.shortPutDelta;
@@ -50,15 +52,20 @@ async function main() {
   console.log(`Profit Target: ${(config.profitTarget * 100).toFixed(0)}% | StopLoss Mult: ${config.stopLossMultiplier || "OFF"}`);
   console.log(`Max Positions: ${config.maxPositions} | Contracts/Spread: ${config.contractsPerSpread}`);
   console.log(`VIX cap: ${config.vixCap} | Index trend SMA: ${config.indexTrendSmaPeriod}`);
+  console.log(`Regime filter: ${useRegime ? "ON (RISK_OFF=skip, NEUTRAL=1x, RISK_ON=1.5x)" : "OFF"}`);
 
   console.log("\nLoading data...");
   const gspcData = await fetchSP500FromDB(startDate, endDate);
   const vixData = await fetchVixFromDB(startDate, endDate);
   console.log(`  ^GSPC: ${gspcData.size} days`);
   console.log(`  VIX: ${vixData.size} days`);
+  const regimeData = useRegime ? await fetchRegimeFromDB(startDate, endDate) : undefined;
+  if (regimeData) {
+    console.log(`  RegimeSignal: ${regimeData.size} days`);
+  }
 
   console.log("\nRunning backtest...");
-  const result = await runUSCreditSpreadBacktest(config, gspcData, vixData);
+  const result = await runUSCreditSpreadBacktest(config, gspcData, vixData, regimeData);
   const m = result.metrics;
 
   console.log("\n" + "=".repeat(60));
@@ -83,6 +90,37 @@ async function main() {
   console.log(`Total Cost: $${m.totalCommission.toFixed(2)}`);
   console.log(`Net P&L: $${m.totalNetPnl.toFixed(2)}`);
   console.log(`Net Return: ${m.netReturnPct.toFixed(2)}%`);
+
+  if (useRegime) {
+    const closedByRegime: Record<string, { trades: number; wins: number; netPnl: number }> = {};
+    for (const sp of result.spreads) {
+      if (sp.state !== "CLOSED") continue;
+      const key = sp.regime ?? "(unknown)";
+      if (!closedByRegime[key]) closedByRegime[key] = { trades: 0, wins: 0, netPnl: 0 };
+      closedByRegime[key].trades++;
+      if ((sp.netPnl ?? 0) > 0) closedByRegime[key].wins++;
+      closedByRegime[key].netPnl += sp.netPnl ?? 0;
+    }
+    const order = ["RISK_ON", "NEUTRAL", "RISK_OFF"];
+    const regimes = Object.keys(closedByRegime).sort(
+      (a, b) => order.indexOf(a) - order.indexOf(b),
+    );
+    if (regimes.length > 0) {
+      console.log("\n" + "=".repeat(60));
+      console.log("Per-Regime Breakdown (Risk-on/off)");
+      console.log("=".repeat(60));
+      for (const r of regimes) {
+        const s = closedByRegime[r];
+        const winRate = s.trades > 0 ? (s.wins / s.trades) * 100 : 0;
+        const avgNet = s.trades > 0 ? s.netPnl / s.trades : 0;
+        console.log(
+          `  ${r.padEnd(10)} trades=${String(s.trades).padStart(4)} | ` +
+            `winRate=${winRate.toFixed(2).padStart(6)}% | ` +
+            `netPnl=$${s.netPnl.toFixed(2).padStart(10)} | avgNet=$${avgNet.toFixed(2)}`,
+        );
+      }
+    }
+  }
 
   if (verbose && result.spreads.length > 0) {
     console.log("\n" + "=".repeat(60));
