@@ -8,7 +8,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      # PrismaClient 用の URL（?schema= 付き）。Secret 自体は schema 無しで管理し、ここで合成する。
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}?schema=auto_us_stock_trader
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
       ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
       ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}

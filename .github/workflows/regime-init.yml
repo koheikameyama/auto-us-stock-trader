@@ -32,6 +32,9 @@ jobs:
         run: npm ci
 
       - name: Apply Prisma migrations (migrate deploy)
+        env:
+          # Secret 本体は schema 無し。Prisma にだけ ?schema= を合成して渡す。
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}?schema=auto_us_stock_trader
         run: npx prisma migrate deploy
 
       - name: Set up Python

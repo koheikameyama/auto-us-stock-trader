@@ -14,20 +14,12 @@ import csv
 import os
 import sys
 import uuid
-from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
 
 import psycopg2
 import psycopg2.extras
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from lib.db import get_database_url
-
-
-def _normalize_dsn(url: str) -> str:
-    """Prisma 用の `?schema=...` を psycopg2 が受け付けないので除去する。"""
-    parsed = urlparse(url)
-    query = [(k, v) for k, v in parse_qsl(parsed.query) if k != "schema"]
-    return urlunparse(parsed._replace(query=urlencode(query)))
 
 DEFAULT_CSV = os.path.join(
     os.path.dirname(__file__), "..", "..", "data", "macro_events.csv"
@@ -65,7 +57,7 @@ def main():
     if not rows:
         return
 
-    conn = psycopg2.connect(_normalize_dsn(get_database_url()))
+    conn = psycopg2.connect(get_database_url())
     cur = conn.cursor()
     try:
         psycopg2.extras.execute_values(
