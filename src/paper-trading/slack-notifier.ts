@@ -131,6 +131,34 @@ export function formatDuplicateOrder(detail: string): string {
   return [`*Duplicate order detected*`, detail].join("\n");
 }
 
+export function formatEntryRejected(p: {
+  shortStrike: number;
+  longStrike: number;
+  expiry: string;
+  contracts: number;
+  message: string | null;
+}): string {
+  return [
+    `*ENTRY REJECTED* SPY ${p.shortStrike}/${p.longStrike} · exp ${p.expiry} · qty ${p.contracts}`,
+    `Reason: ${p.message ?? "(unknown — broker returned no detail)"}`,
+  ].join("\n");
+}
+
+export function formatEntryTimeout(p: {
+  shortStrike: number;
+  longStrike: number;
+  expiry: string;
+  contracts: number;
+  brokerOrderId: string;
+  message: string | null;
+}): string {
+  return [
+    `*ENTRY TIMEOUT* SPY ${p.shortStrike}/${p.longStrike} · exp ${p.expiry} · qty ${p.contracts}`,
+    `Order: \`${p.brokerOrderId}\``,
+    `Detail: ${p.message ?? "(no detail)"}`,
+  ].join("\n");
+}
+
 // ─── Daily summary header + events list ───
 
 export function formatDailySummary(s: {

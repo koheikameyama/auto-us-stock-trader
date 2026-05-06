@@ -32,7 +32,7 @@ import {
   sendSlack,
   formatEntrySuccess, formatCloseSuccess, formatExpire,
   formatDDStop, formatDailySummary, formatErrorAlert, formatKillSwitch, formatDuplicateOrder,
-  formatNonTradingDay,
+  formatNonTradingDay, formatEntryRejected, formatEntryTimeout,
 } from "./slack-notifier";
 
 const args = process.argv.slice(2);
@@ -358,7 +358,11 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
         },
         { dryRun },
       );
-      console.log(`  Order: brokerOrderId=${placed.brokerOrderId}, status=${placed.status}, filledCredit=${placed.filledCredit ?? "-"}`);
+      console.log(
+        `  Order: brokerOrderId=${placed.brokerOrderId}, status=${placed.status}, ` +
+          `filledCredit=${placed.filledCredit ?? "-"}` +
+          (placed.message ? `, message="${placed.message}"` : ""),
+      );
       if (placed.status === "FILLED") {
         summaryEvents.push(formatEntrySuccess({
           shortStrike: signal.shortStrike,
@@ -366,6 +370,42 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
           expiry: signal.expirationDate,
           filledCredit: placed.filledCredit,
         }));
+      } else if (placed.status === "REJECTED") {
+        await sendSlack({
+          text: formatEntryRejected({
+            shortStrike: signal.shortStrike,
+            longStrike: signal.longStrike,
+            expiry: signal.expirationDate,
+            contracts: finalContracts,
+            message: placed.message ?? null,
+          }),
+          level: "error",
+        });
+        await prisma.errorLog.create({
+          data: {
+            category: "ORDER_REJECTED",
+            message: placed.message ?? "(no detail)",
+            context: {
+              shortStrike: signal.shortStrike,
+              longStrike: signal.longStrike,
+              expiry: signal.expirationDate,
+              contracts: finalContracts,
+              brokerOrderId: placed.brokerOrderId,
+            },
+          },
+        });
+      } else if (placed.status === "TIMEOUT") {
+        await sendSlack({
+          text: formatEntryTimeout({
+            shortStrike: signal.shortStrike,
+            longStrike: signal.longStrike,
+            expiry: signal.expirationDate,
+            contracts: finalContracts,
+            brokerOrderId: placed.brokerOrderId,
+            message: placed.message ?? null,
+          }),
+          level: "warn",
+        });
       }
     } catch (e: any) {
       console.error(`  ❌ Order failed: ${e.message}`);

@@ -22,6 +22,11 @@ export interface PlacedSpread {
   status: OrderResult["status"];
   filledCredit: number | null;
   positionId: string | null;
+  /**
+   * 非 FILLED 終端 (REJECTED / TIMEOUT / CANCELLED) のとき、broker / pollOrder
+   * から渡された理由メッセージ。FILLED のときは undefined。
+   */
+  message?: string;
 }
 
 function expiryToDate(expiry: string): Date {
@@ -130,6 +135,7 @@ export async function placeNewSpreadOrder(
       quantity: contracts,
       limitPrice: -estimatedCredit,
       status: result.status,
+      message: result.status === "FILLED" ? null : (result.message ?? null),
       submittedAt: new Date(),
       filledAt: result.status === "FILLED" ? new Date() : null,
       filledPrice: result.filledPrice,
@@ -166,6 +172,9 @@ export async function placeNewSpreadOrder(
     status: result.status,
     filledCredit,
     positionId,
+    ...(result.status !== "FILLED" && result.message != null
+      ? { message: result.message }
+      : {}),
   };
 }
 
@@ -223,6 +232,7 @@ export async function closeSpreadOrder(
       quantity: position.contracts,
       limitPrice: input.currentSpreadValue,
       status: result.status,
+      message: result.status === "FILLED" ? null : (result.message ?? null),
       submittedAt: new Date(),
       filledAt: result.status === "FILLED" ? new Date() : null,
       filledPrice: result.filledPrice,
@@ -259,6 +269,7 @@ export async function closeSpreadOrder(
     status: result.status,
     filledCredit: null,
     positionId: position.id,
+    ...(result.message != null ? { message: result.message } : {}),
   };
 }
 

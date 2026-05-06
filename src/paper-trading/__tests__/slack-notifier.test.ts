@@ -4,6 +4,8 @@ import {
   formatEntrySuccess,
   formatCloseSuccess,
   formatErrorAlert,
+  formatEntryRejected,
+  formatEntryTimeout,
 } from "../slack-notifier";
 
 describe("sendSlack", () => {
@@ -74,5 +76,48 @@ describe("formatters", () => {
     const msg = formatErrorAlert("ORDER_FAILED", "rejected by exchange");
     expect(msg).toContain("ORDER_FAILED");
     expect(msg).toContain("rejected by exchange");
+  });
+
+  it("formatEntryRejected includes spread + broker reject message", () => {
+    const msg = formatEntryRejected({
+      shortStrike: 692,
+      longStrike: 687,
+      expiry: "2026-06-08",
+      contracts: 1,
+      message: "Alpaca 422: option contract not found",
+    });
+    expect(msg).toContain("REJECTED");
+    expect(msg).toContain("692/687");
+    expect(msg).toContain("2026-06-08");
+    expect(msg).toContain("Alpaca 422: option contract not found");
+  });
+
+  it("formatEntryRejected handles missing message gracefully", () => {
+    const msg = formatEntryRejected({
+      shortStrike: 692,
+      longStrike: 687,
+      expiry: "2026-06-08",
+      contracts: 1,
+      message: null,
+    });
+    expect(msg).toContain("REJECTED");
+    expect(msg).toContain("692/687");
+    // 何らかの「reason 不明」を表す表記があれば OK（"unknown" / "no detail" 等）
+    expect(msg.toLowerCase()).toMatch(/unknown|no detail|none/);
+  });
+
+  it("formatEntryTimeout includes spread + broker order id", () => {
+    const msg = formatEntryTimeout({
+      shortStrike: 695,
+      longStrike: 690,
+      expiry: "2026-06-05",
+      contracts: 1,
+      brokerOrderId: "abc-123",
+      message: "Order fill confirmation timed out (5 min); cancel attempted",
+    });
+    expect(msg).toContain("TIMEOUT");
+    expect(msg).toContain("695/690");
+    expect(msg).toContain("abc-123");
+    expect(msg).toContain("timed out");
   });
 });

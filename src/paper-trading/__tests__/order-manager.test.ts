@@ -95,6 +95,99 @@ describe("order-manager", () => {
     ).rejects.toThrow(/Duplicate/);
   });
 
+  describe("placeNewSpreadOrder error propagation", () => {
+    it("REJECTED 時に Alpaca の error message を PlacedSpread と TradingOrder.message に乗せる", async () => {
+      const mockAlpaca = {
+        placeMultiLegOrder: vi.fn().mockResolvedValue({
+          orderId: "",
+          status: "REJECTED",
+          message: "Alpaca 422: option contract not tradable",
+        }),
+      } as any;
+
+      const result = await placeNewSpreadOrder(
+        mockAlpaca,
+        prisma,
+        {
+          underlying: "SPY",
+          shortStrike: 692,
+          longStrike: 687,
+          expiry: "20260608",
+          contracts: 1,
+          estimatedCredit: 0.96,
+        },
+      );
+
+      expect(result.status).toBe("REJECTED");
+      expect(result.message).toBe("Alpaca 422: option contract not tradable");
+
+      const orders = await prisma.tradingOrder.findMany();
+      expect(orders).toHaveLength(1);
+      expect(orders[0].status).toBe("REJECTED");
+      expect(orders[0].message).toBe("Alpaca 422: option contract not tradable");
+    });
+
+    it("TIMEOUT 時に Alpaca の cancel メッセージを PlacedSpread と TradingOrder.message に乗せる", async () => {
+      const mockAlpaca = {
+        placeMultiLegOrder: vi.fn().mockResolvedValue({
+          orderId: "alpaca-uuid-timeout",
+          status: "TIMEOUT",
+          message: "Order fill confirmation timed out (5 min); cancel attempted",
+        }),
+      } as any;
+
+      const result = await placeNewSpreadOrder(
+        mockAlpaca,
+        prisma,
+        {
+          underlying: "SPY",
+          shortStrike: 695,
+          longStrike: 690,
+          expiry: "20260605",
+          contracts: 1,
+          estimatedCredit: 0.96,
+        },
+      );
+
+      expect(result.status).toBe("TIMEOUT");
+      expect(result.message).toContain("timed out");
+      expect(result.brokerOrderId).toBe("alpaca-uuid-timeout");
+
+      const orders = await prisma.tradingOrder.findMany();
+      expect(orders[0].message).toContain("timed out");
+    });
+
+    it("FILLED 時は message を持たない（null のまま）", async () => {
+      const mockAlpaca = {
+        placeMultiLegOrder: vi.fn().mockResolvedValue({
+          orderId: "alpaca-fill-1",
+          status: "FILLED",
+          filledPrice: -0.85,
+          commission: 0,
+        }),
+      } as any;
+
+      const result = await placeNewSpreadOrder(
+        mockAlpaca,
+        prisma,
+        {
+          underlying: "SPY",
+          shortStrike: 480,
+          longStrike: 475,
+          expiry: "20260619",
+          contracts: 1,
+          estimatedCredit: 0.85,
+        },
+      );
+
+      expect(result.status).toBe("FILLED");
+      expect(result.message).toBeUndefined();
+
+      const orders = await prisma.tradingOrder.findMany();
+      expect(orders[0].message).toBeNull();
+    });
+  });
+
   describe("closeSpreadOrder", () => {
     it("submits a debit mleg order (BUY back short, SELL long) and updates Position state to CLOSED", async () => {
       const mockAlpaca = {

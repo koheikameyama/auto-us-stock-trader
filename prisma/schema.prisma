@@ -79,6 +79,7 @@ model TradingOrder {
   quantity        Int
   limitPrice      Float    // negative = credit (NET_CREDIT)
   status          String   // "SUBMITTED" | "FILLED" | "CANCELLED" | "REJECTED" | "TIMEOUT"
+  message         String?  // broker / pollOrder からの非 FILLED 終端理由を保持（観測性）
   submittedAt     DateTime
   filledAt        DateTime?
   filledPrice     Float?

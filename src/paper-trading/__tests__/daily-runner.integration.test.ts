@@ -71,11 +71,24 @@ async function cleanDb() {
 }
 
 describe("runDailyCycle integration", () => {
+  // sendSlack は global.fetch を直接叩くだけ。`@prisma/client` が `.env` を
+  // 自動 load するため process.env.SLACK_WEBHOOK_URL は本物が漏れることが
+  // ある。fetch を describe 全体で mock して、どんな経路でも実 Slack に
+  // 飛ばさないようにする。
+  const fetchMock = vi.fn();
+  const origFetch = global.fetch;
+
   beforeEach(async () => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue({ ok: true } as any);
+    (global as any).fetch = fetchMock;
+    process.env.SLACK_WEBHOOK_URL = "https://hooks.slack.com/test";
     await cleanDb();
     mockVixMap = new Map([["2026-04-30", 15.5]]);
   });
   afterEach(async () => {
+    (global as any).fetch = origFetch;
+    delete process.env.SLACK_WEBHOOK_URL;
     await cleanDb();
   });
 
@@ -197,6 +210,42 @@ describe("runDailyCycle integration", () => {
     expect(mockAlpaca.placeMultiLegOrder).not.toHaveBeenCalled();
     const entrySignal = await prisma.signalLog.findFirst({ where: { signalType: "ENTRY" } });
     expect(entrySignal?.reason).toBe("SKIP_MAX_POSITIONS");
+  });
+
+  it("REJECTED 注文時に Slack に reject reason を含む alert を送る + DailyEquitySnapshot は保存される", async () => {
+    mockGspcMap = buildLinearGspc(4500, 5, 50, new Date(Date.UTC(2026, 2, 1)));
+
+    const mockAlpaca = makeMockAlpaca({
+      placeMultiLegOrder: vi.fn().mockResolvedValue({
+        orderId: "",
+        status: "REJECTED",
+        message: "Alpaca 422: option contract not tradable",
+      }),
+    });
+    const { runDailyCycle } = await import("../daily-runner");
+
+    await runDailyCycle({
+      alpaca: mockAlpaca as any,
+      prisma,
+      today: "2026-05-01",
+      dryRun: false,
+    });
+
+    // describe-level fetchMock に reject alert が乗っている
+    const bodies = fetchMock.mock.calls.map((c: any) => JSON.parse(c[1].body));
+    const rejectMsg = bodies.find((b: any) =>
+      b.attachments?.[0]?.text?.includes("ENTRY REJECTED"),
+    );
+    expect(rejectMsg, "reject Slack alert was not sent").toBeTruthy();
+    expect(rejectMsg.attachments[0].text).toContain("Alpaca 422: option contract not tradable");
+
+    const order = await prisma.tradingOrder.findFirst({
+      where: { status: "REJECTED" },
+    });
+    expect(order?.message).toBe("Alpaca 422: option contract not tradable");
+
+    const snap = await prisma.dailyEquitySnapshot.findUnique({ where: { date: new Date("2026-05-01") } });
+    expect(snap).toBeTruthy();
   });
 
   it("ignores broker pending EXIT-only mleg orders (no sell_to_open) — does not block entry", async () => {
