@@ -38,6 +38,21 @@ import {
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
 
+/**
+ * SPY 用 option expiry 候補日（Friday-only、当日含む lookforwardDays 日先まで）。
+ *
+ * SPY は Mon/Tue/Wed/Thu の weekly listing は短期 DTE 中心で、~35 DTE まで
+ * 延びていないため、entry 計算では Friday に絞る必要がある。
+ */
+export function buildOptionExpiryCandidates(today: string, lookforwardDays: number): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < lookforwardDays; i++) {
+    const d = dayjs(today).add(i, "day");
+    if (d.day() === 5) out.push(d.format("YYYY-MM-DD"));
+  }
+  return out;
+}
+
 export interface DailyCycleDeps {
   alpaca: AlpacaClient;
   prisma: PrismaClient;
@@ -268,12 +283,11 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
     : null;
   console.log(`SMA50(GSPC) = ${sma50?.toFixed(2) ?? "(unavailable)"}`);
 
-  const tradingDays: string[] = [];
-  for (let i = 0; i < 100; i++) {
-    const d = dayjs(today).add(i, "day");
-    const dow = d.day();
-    if (dow !== 0 && dow !== 6) tradingDays.push(d.format("YYYY-MM-DD"));
-  }
+  // SPY options は ~35 DTE では Friday weekly + 月次 3rd Friday しか listing
+  // されておらず、Mon/Tue/Wed/Thu 期日は OCC に存在しない。Mon-Fri 全曜日を
+  // 候補に入れると signal-generator が non-Friday を選び、Alpaca で
+  // 「asset not found」(422) となって reject される（5/4-5/7 の 4 日連続で実観測）。
+  const tradingDays = buildOptionExpiryCandidates(today, 100);
 
   const signal = generateEntrySignal({
     today,
