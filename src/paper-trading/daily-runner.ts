@@ -16,7 +16,8 @@
 import { pathToFileURL } from "url";
 import dayjs from "dayjs";
 import { PrismaClient } from "@prisma/client";
-import { AlpacaClient } from "./alpaca-client";
+import { AlpacaClient, type OptionContract } from "./alpaca-client";
+import { bsPutPrice } from "../core/options-pricing";
 import { isKillSwitchActive, getKillSwitchInfo } from "./kill-switch";
 import { reconcilePositions } from "./position-syncer";
 import { withRetry } from "./with-retry";
@@ -39,18 +40,69 @@ const args = process.argv.slice(2);
 const DRY_RUN = args.includes("--dry-run");
 
 /**
- * SPY 用 option expiry 候補日（Friday-only、当日含む lookforwardDays 日先まで）。
+ * Black-Scholes が選んだ理想 strike を、Alpaca が当該 expiry で実際に listing
+ * している strike にスナップする。
  *
- * SPY は Mon/Tue/Wed/Thu の weekly listing は短期 DTE 中心で、~35 DTE まで
- * 延びていないため、entry 計算では Friday に絞る必要がある。
+ * - short は理想値に最も近い available strike へ。距離が `maxSnapDistance` を
+ *   超える場合は null（= 発注不可）。
+ * - long は `short - 理想 width` に最も近く、かつ `short` より厳密に小さい
+ *   available strike へ。snap 距離は同じく `maxSnapDistance` で頭打ち。
+ *
+ * 戻り値の `snappedShortStrike` / `snappedLongStrike` が null のときは entry
+ * 不可（SKIP_STRIKE_UNAVAILABLE）として扱う。
  */
-export function buildOptionExpiryCandidates(today: string, lookforwardDays: number): string[] {
-  const out: string[] = [];
-  for (let i = 0; i < lookforwardDays; i++) {
-    const d = dayjs(today).add(i, "day");
-    if (d.day() === 5) out.push(d.format("YYYY-MM-DD"));
+export function snapStrikesToChain(params: {
+  idealShort: number;
+  idealLong: number;
+  availableStrikes: number[];
+  maxSnapDistance?: number;
+}): { snappedShort: number | null; snappedLong: number | null; snappedWidth: number | null } {
+  const { idealShort, idealLong, availableStrikes, maxSnapDistance = 3 } = params;
+  if (availableStrikes.length === 0) {
+    return { snappedShort: null, snappedLong: null, snappedWidth: null };
   }
-  return out;
+  const sorted = [...new Set(availableStrikes)].sort((a, b) => a - b);
+
+  const nearest = (target: number): number => {
+    let best = sorted[0];
+    let bestDist = Math.abs(best - target);
+    for (const s of sorted) {
+      const d = Math.abs(s - target);
+      if (d < bestDist) {
+        best = s;
+        bestDist = d;
+      }
+    }
+    return best;
+  };
+
+  const snappedShort = nearest(idealShort);
+  if (Math.abs(snappedShort - idealShort) > maxSnapDistance) {
+    return { snappedShort: null, snappedLong: null, snappedWidth: null };
+  }
+
+  const below = sorted.filter((s) => s < snappedShort);
+  if (below.length === 0) {
+    return { snappedShort, snappedLong: null, snappedWidth: null };
+  }
+  let snappedLong = below[0];
+  let bestDist = Math.abs(below[0] - idealLong);
+  for (const s of below) {
+    const d = Math.abs(s - idealLong);
+    if (d < bestDist) {
+      snappedLong = s;
+      bestDist = d;
+    }
+  }
+  if (Math.abs(snappedLong - idealLong) > maxSnapDistance) {
+    return { snappedShort, snappedLong: null, snappedWidth: null };
+  }
+
+  return {
+    snappedShort,
+    snappedLong,
+    snappedWidth: snappedShort - snappedLong,
+  };
 }
 
 export interface DailyCycleDeps {
@@ -283,159 +335,54 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
     : null;
   console.log(`SMA50(GSPC) = ${sma50?.toFixed(2) ?? "(unavailable)"}`);
 
-  // SPY options は ~35 DTE では Friday weekly + 月次 3rd Friday しか listing
-  // されておらず、Mon/Tue/Wed/Thu 期日は OCC に存在しない。Mon-Fri 全曜日を
-  // 候補に入れると signal-generator が non-Friday を選び、Alpaca で
-  // 「asset not found」(422) となって reject される（5/4-5/7 の 4 日連続で実観測）。
-  const tradingDays = buildOptionExpiryCandidates(today, 100);
-
-  const signal = generateEntrySignal({
-    today,
-    gspc,
-    spotSpy,
-    vix,
-    smaGspc: sma50,
-    cash: netLiq,
-    openPositionCount,
-    ddStopActive: ddState.ddStopActive,
-    tradingDays,
-    config: { ...US_CREDIT_SPREAD_DEFAULTS, startDate: today, endDate: today },
-  });
-
-  // Regime filter: 当日の Risk-on/off レジームに応じて発注サイズを調整
-  const regime = await getRegimeMultiplier(prisma, today);
-  const baseContracts = US_CREDIT_SPREAD_DEFAULTS.contractsPerSpread;
-  const finalContracts = scaleContracts(baseContracts, regime.multiplier);
+  // Alpaca の listing から実在する put 契約を取得（forward 100 日、spot ± 15%）。
+  // - 当日 listing 済みの expiry のみ signal-generator に渡し、Mon/Tue/Wed/Thu や
+  //   未上場 expiry が選ばれて「asset not found」(422) となる事故を防ぐ。
+  // - 後段で signal の strike を実 listing にスナップ。
+  const lookforwardEnd = dayjs(today).add(100, "day").format("YYYY-MM-DD");
+  const strikeMin = Math.floor(spotSpy * 0.85);
+  const strikeMax = Math.ceil(spotSpy * 1.05);
+  const spyContracts: OptionContract[] = await withRetry(
+    () => alpaca.listOptionContracts("SPY", "P", today, lookforwardEnd, strikeMin, strikeMax),
+    { retries: 3, intervalMs: 5_000 },
+  );
+  const tradingDays = [...new Set(spyContracts.map((c) => c.expiry))].sort();
   console.log(
-    `Regime: state=${regime.state ?? "(none)"}, multiplier=${regime.multiplier}, ` +
-      `contracts ${baseContracts} -> ${finalContracts}`,
+    `Alpaca SPY put contracts: ${spyContracts.length} contracts across ${tradingDays.length} expiries ` +
+      `in [${today}, ${lookforwardEnd}], strikes [${strikeMin}, ${strikeMax}]`,
   );
 
-  console.log(`Entry signal: ${signal.reason}`);
-  await prisma.signalLog.create({
-    data: {
-      date: new Date(today),
-      signalType: "ENTRY",
-      reason: signal.reason,
-      details: {
-        spy: spotSpy,
-        vix,
-        sma50,
-        gspc,
-        ddStopActive: ddState.ddStopActive,
-        regimeState: regime.state,
-        regimeMultiplier: regime.multiplier,
-        baseContracts,
-        finalContracts,
-        ...(signal.reason === "ENTERED" ? {
-          shortStrike: signal.shortStrike,
-          longStrike: signal.longStrike,
-          expirationDate: signal.expirationDate,
-          estimatedCredit: signal.estimatedCredit,
-        } : {}),
-      },
-    },
-  });
-
-  if (signal.reason === "ENTERED" && finalContracts <= 0) {
-    console.log(
-      `Skipping entry: regime ${regime.state} reduced contracts to ${finalContracts}`,
-    );
+  if (tradingDays.length === 0) {
+    console.error(`⚠ No SPY put contracts listed at Alpaca in window; skipping entry`);
     await prisma.signalLog.create({
       data: {
         date: new Date(today),
-        signalType: "REGIME_SKIP",
-        reason: regime.state ?? "REGIME_UNKNOWN",
-        details: {
-          baseContracts,
-          finalContracts,
-          regimeMultiplier: regime.multiplier,
-          shortStrike: signal.shortStrike,
-          longStrike: signal.longStrike,
-        },
+        signalType: "ENTRY",
+        reason: "SKIP_NO_CONTRACTS",
+        details: { lookforwardEnd, strikeMin, strikeMax },
       },
     });
-  } else if (signal.reason === "ENTERED") {
-    console.log(`Placing order: SPY ${signal.expirationDate} P ${signal.shortStrike}/${signal.longStrike}, credit ~$${signal.estimatedCredit.toFixed(2)}, contracts=${finalContracts}`);
-    const expiryYYYYMMDD = signal.expirationDate.replace(/-/g, "");
-    try {
-      const placed = await placeNewSpreadOrder(
-        alpaca,
-        prisma,
-        {
-          underlying: "SPY",
-          shortStrike: signal.shortStrike,
-          longStrike: signal.longStrike,
-          expiry: expiryYYYYMMDD,
-          contracts: finalContracts,
-          estimatedCredit: signal.estimatedCredit,
-        },
-        { dryRun },
-      );
-      console.log(
-        `  Order: brokerOrderId=${placed.brokerOrderId}, status=${placed.status}, ` +
-          `filledCredit=${placed.filledCredit ?? "-"}` +
-          (placed.message ? `, message="${placed.message}"` : ""),
-      );
-      if (placed.status === "FILLED") {
-        summaryEvents.push(formatEntrySuccess({
-          shortStrike: signal.shortStrike,
-          longStrike: signal.longStrike,
-          expiry: signal.expirationDate,
-          filledCredit: placed.filledCredit,
-        }));
-      } else if (placed.status === "REJECTED") {
-        await sendSlack({
-          text: formatEntryRejected({
-            shortStrike: signal.shortStrike,
-            longStrike: signal.longStrike,
-            expiry: signal.expirationDate,
-            contracts: finalContracts,
-            message: placed.message ?? null,
-          }),
-          level: "error",
-        });
-        await prisma.errorLog.create({
-          data: {
-            category: "ORDER_REJECTED",
-            message: placed.message ?? "(no detail)",
-            context: {
-              shortStrike: signal.shortStrike,
-              longStrike: signal.longStrike,
-              expiry: signal.expirationDate,
-              contracts: finalContracts,
-              brokerOrderId: placed.brokerOrderId,
-            },
-          },
-        });
-      } else if (placed.status === "TIMEOUT") {
-        await sendSlack({
-          text: formatEntryTimeout({
-            shortStrike: signal.shortStrike,
-            longStrike: signal.longStrike,
-            expiry: signal.expirationDate,
-            contracts: finalContracts,
-            brokerOrderId: placed.brokerOrderId,
-            message: placed.message ?? null,
-          }),
-          level: "warn",
-        });
-      }
-    } catch (e: any) {
-      console.error(`  ❌ Order failed: ${e.message}`);
-      await prisma.errorLog.create({
-        data: {
-          category: "ORDER_FAILED",
-          message: e.message,
-          context: { signal: { reason: signal.reason } },
-        },
-      });
-      const isDuplicate = /Duplicate/i.test(e.message);
-      await sendSlack({
-        text: isDuplicate ? formatDuplicateOrder(e.message) : formatErrorAlert("ORDER_FAILED", e.message),
-        level: isDuplicate ? "critical" : "error",
-      });
-    }
+    await sendSlack({
+      text: `*ENTRY SKIPPED* (SKIP_NO_CONTRACTS) — Alpaca に SPY put listing が無い (${today} 〜 ${lookforwardEnd})`,
+      level: "warn",
+    });
+  } else {
+    await evaluateAndPlaceEntry({
+      alpaca,
+      prisma,
+      today,
+      dryRun,
+      spotSpy,
+      vix,
+      gspc,
+      sma50,
+      netLiq,
+      openPositionCount,
+      ddState,
+      spyContracts,
+      tradingDays,
+      summaryEvents,
+    });
   }
 
   // ── 8. DailyEquitySnapshot を保存 ──
@@ -473,6 +420,237 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
     text: formatDailySummary({ date: today, openCount: openPositionCount, equity: totalEquity, dailyPnl, events: summaryEvents }),
     level: "info",
   });
+}
+
+interface EntryEvaluationDeps {
+  alpaca: AlpacaClient;
+  prisma: PrismaClient;
+  today: string;
+  dryRun: boolean;
+  spotSpy: number;
+  vix: number;
+  gspc: number;
+  sma50: number | null;
+  netLiq: number;
+  openPositionCount: number;
+  ddState: { ddStopActive: boolean };
+  spyContracts: OptionContract[];
+  tradingDays: string[];
+  summaryEvents: string[];
+}
+
+async function evaluateAndPlaceEntry(deps: EntryEvaluationDeps): Promise<void> {
+  const {
+    alpaca, prisma, today, dryRun, spotSpy, vix, gspc, sma50, netLiq,
+    openPositionCount, ddState, spyContracts, tradingDays, summaryEvents,
+  } = deps;
+
+  const signal = generateEntrySignal({
+    today,
+    gspc,
+    spotSpy,
+    vix,
+    smaGspc: sma50,
+    cash: netLiq,
+    openPositionCount,
+    ddStopActive: ddState.ddStopActive,
+    tradingDays,
+    config: { ...US_CREDIT_SPREAD_DEFAULTS, startDate: today, endDate: today },
+  });
+
+  const regime = await getRegimeMultiplier(prisma, today);
+  const baseContracts = US_CREDIT_SPREAD_DEFAULTS.contractsPerSpread;
+  const finalContracts = scaleContracts(baseContracts, regime.multiplier);
+  console.log(
+    `Regime: state=${regime.state ?? "(none)"}, multiplier=${regime.multiplier}, ` +
+      `contracts ${baseContracts} -> ${finalContracts}`,
+  );
+
+  console.log(`Entry signal: ${signal.reason}`);
+  await prisma.signalLog.create({
+    data: {
+      date: new Date(today),
+      signalType: "ENTRY",
+      reason: signal.reason,
+      details: {
+        spy: spotSpy,
+        vix,
+        sma50,
+        gspc,
+        ddStopActive: ddState.ddStopActive,
+        regimeState: regime.state,
+        regimeMultiplier: regime.multiplier,
+        baseContracts,
+        finalContracts,
+        ...(signal.reason === "ENTERED" ? {
+          shortStrike: signal.shortStrike,
+          longStrike: signal.longStrike,
+          expirationDate: signal.expirationDate,
+          estimatedCredit: signal.estimatedCredit,
+        } : {}),
+      },
+    },
+  });
+
+  if (signal.reason !== "ENTERED") return;
+
+  if (finalContracts <= 0) {
+    console.log(
+      `Skipping entry: regime ${regime.state} reduced contracts to ${finalContracts}`,
+    );
+    await prisma.signalLog.create({
+      data: {
+        date: new Date(today),
+        signalType: "REGIME_SKIP",
+        reason: regime.state ?? "REGIME_UNKNOWN",
+        details: {
+          baseContracts,
+          finalContracts,
+          regimeMultiplier: regime.multiplier,
+          shortStrike: signal.shortStrike,
+          longStrike: signal.longStrike,
+        },
+      },
+    });
+    return;
+  }
+
+  // ── Strike snap: 理想 strike を Alpaca 実 listing にスナップ ──
+  // signal-generator は $1 刻みの BS モデルで strike を選ぶが、Alpaca が
+  // その strike を listing していないと 422「asset not found」で reject
+  // される。当 expiry の available strike にスナップして発注前に整合させる。
+  const chainStrikes = spyContracts
+    .filter((c) => c.expiry === signal.expirationDate)
+    .map((c) => c.strike);
+  const snap = snapStrikesToChain({
+    idealShort: signal.shortStrike,
+    idealLong: signal.longStrike,
+    availableStrikes: chainStrikes,
+  });
+  if (snap.snappedShort == null || snap.snappedLong == null) {
+    console.error(
+      `⚠ Strike unavailable at Alpaca: ideal=${signal.shortStrike}/${signal.longStrike} ` +
+        `expiry=${signal.expirationDate}, available=[${chainStrikes.slice(0, 10).join(",")}...]`,
+    );
+    await prisma.signalLog.create({
+      data: {
+        date: new Date(today),
+        signalType: "ENTRY",
+        reason: "SKIP_STRIKE_UNAVAILABLE",
+        details: {
+          idealShort: signal.shortStrike,
+          idealLong: signal.longStrike,
+          expirationDate: signal.expirationDate,
+          availableCount: chainStrikes.length,
+        },
+      },
+    });
+    await sendSlack({
+      text: `*ENTRY SKIPPED* (SKIP_STRIKE_UNAVAILABLE) — SPY ${signal.expirationDate} で ${signal.shortStrike}/${signal.longStrike} 近傍の strike が Alpaca に無い`,
+      level: "warn",
+    });
+    return;
+  }
+
+  // スナップで strike が動いたら BS で credit を再計算（理想と width が変わる可能性あり）
+  let shortStrike = snap.snappedShort;
+  let longStrike = snap.snappedLong;
+  let estimatedCredit = signal.estimatedCredit;
+  if (shortStrike !== signal.shortStrike || longStrike !== signal.longStrike) {
+    const tte = Math.max(
+      (new Date(signal.expirationDate).getTime() - new Date(today).getTime()) / (365 * 86400000),
+      1 / 365,
+    );
+    const iv = (vix / 100) * US_CREDIT_SPREAD_DEFAULTS.ivScaleFactor;
+    const sp = bsPutPrice(spotSpy, shortStrike, tte, US_CREDIT_SPREAD_DEFAULTS.riskFreeRate, iv);
+    const lp = bsPutPrice(spotSpy, longStrike, tte, US_CREDIT_SPREAD_DEFAULTS.riskFreeRate, iv);
+    estimatedCredit = Math.max(0.01, sp - lp);
+    console.log(
+      `Strike snapped: ${signal.shortStrike}/${signal.longStrike} -> ${shortStrike}/${longStrike} ` +
+        `(width ${signal.shortStrike - signal.longStrike} -> ${snap.snappedWidth}, credit ${signal.estimatedCredit.toFixed(2)} -> ${estimatedCredit.toFixed(2)})`,
+    );
+  }
+
+  console.log(`Placing order: SPY ${signal.expirationDate} P ${shortStrike}/${longStrike}, credit ~$${estimatedCredit.toFixed(2)}, contracts=${finalContracts}`);
+  const expiryYYYYMMDD = signal.expirationDate.replace(/-/g, "");
+  try {
+    const placed = await placeNewSpreadOrder(
+      alpaca,
+      prisma,
+      {
+        underlying: "SPY",
+        shortStrike,
+        longStrike,
+        expiry: expiryYYYYMMDD,
+        contracts: finalContracts,
+        estimatedCredit,
+      },
+      { dryRun },
+    );
+    console.log(
+      `  Order: brokerOrderId=${placed.brokerOrderId}, status=${placed.status}, ` +
+        `filledCredit=${placed.filledCredit ?? "-"}` +
+        (placed.message ? `, message="${placed.message}"` : ""),
+    );
+    if (placed.status === "FILLED") {
+      summaryEvents.push(formatEntrySuccess({
+        shortStrike,
+        longStrike,
+        expiry: signal.expirationDate,
+        filledCredit: placed.filledCredit,
+      }));
+    } else if (placed.status === "REJECTED") {
+      await sendSlack({
+        text: formatEntryRejected({
+          shortStrike,
+          longStrike,
+          expiry: signal.expirationDate,
+          contracts: finalContracts,
+          message: placed.message ?? null,
+        }),
+        level: "error",
+      });
+      await prisma.errorLog.create({
+        data: {
+          category: "ORDER_REJECTED",
+          message: placed.message ?? "(no detail)",
+          context: {
+            shortStrike,
+            longStrike,
+            expiry: signal.expirationDate,
+            contracts: finalContracts,
+            brokerOrderId: placed.brokerOrderId,
+          },
+        },
+      });
+    } else if (placed.status === "TIMEOUT") {
+      await sendSlack({
+        text: formatEntryTimeout({
+          shortStrike,
+          longStrike,
+          expiry: signal.expirationDate,
+          contracts: finalContracts,
+          brokerOrderId: placed.brokerOrderId,
+          message: placed.message ?? null,
+        }),
+        level: "warn",
+      });
+    }
+  } catch (e: any) {
+    console.error(`  ❌ Order failed: ${e.message}`);
+    await prisma.errorLog.create({
+      data: {
+        category: "ORDER_FAILED",
+        message: e.message,
+        context: { signal: { reason: signal.reason } },
+      },
+    });
+    const isDuplicate = /Duplicate/i.test(e.message);
+    await sendSlack({
+      text: isDuplicate ? formatDuplicateOrder(e.message) : formatErrorAlert("ORDER_FAILED", e.message),
+      level: isDuplicate ? "critical" : "error",
+    });
+  }
 }
 
 function requireEnv(name: string): string {

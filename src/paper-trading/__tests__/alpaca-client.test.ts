@@ -112,6 +112,77 @@ describe("AlpacaClient.getOpenOrders", () => {
   });
 });
 
+describe("AlpacaClient.listOptionContracts", () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => { originalFetch = global.fetch; });
+  afterEach(() => { global.fetch = originalFetch; });
+
+  it("sends date/strike range filters and parses tradable active contracts", async () => {
+    const seenUrls: string[] = [];
+    global.fetch = makeFetchMock(({ url }) => {
+      seenUrls.push(url);
+      return {
+        body: {
+          option_contracts: [
+            { symbol: "SPY260619P00700000", expiration_date: "2026-06-19", strike_price: "700", type: "put", status: "active", tradable: true },
+            { symbol: "SPY260619P00705000", expiration_date: "2026-06-19", strike_price: "705", type: "put", status: "active", tradable: true },
+            { symbol: "SPY260626P00700000", expiration_date: "2026-06-26", strike_price: "700", type: "put", status: "active", tradable: true },
+            // non-tradable はフィルタアウト
+            { symbol: "SPY260619P00710000", expiration_date: "2026-06-19", strike_price: "710", type: "put", status: "active", tradable: false },
+          ],
+          next_page_token: null,
+        },
+      };
+    }) as any;
+
+    const c = newClient();
+    const contracts = await c.listOptionContracts("SPY", "P", "2026-05-11", "2026-08-19", 600, 800);
+
+    expect(contracts).toHaveLength(3);
+    expect(contracts.every((c) => c.right === "P")).toBe(true);
+    expect(contracts.map((c) => c.strike).sort((a, b) => a - b)).toEqual([700, 700, 705]);
+
+    expect(seenUrls).toHaveLength(1);
+    expect(seenUrls[0]).toContain("underlying_symbols=SPY");
+    expect(seenUrls[0]).toContain("type=put");
+    expect(seenUrls[0]).toContain("expiration_date_gte=2026-05-11");
+    expect(seenUrls[0]).toContain("expiration_date_lte=2026-08-19");
+    expect(seenUrls[0]).toContain("strike_price_gte=600");
+    expect(seenUrls[0]).toContain("strike_price_lte=800");
+    expect(seenUrls[0]).toContain("status=active");
+  });
+
+  it("follows pagination via next_page_token", async () => {
+    let call = 0;
+    global.fetch = makeFetchMock(() => {
+      call += 1;
+      if (call === 1) {
+        return {
+          body: {
+            option_contracts: [
+              { symbol: "SPY260619P00700000", expiration_date: "2026-06-19", strike_price: "700", type: "put", status: "active", tradable: true },
+            ],
+            next_page_token: "tok-1",
+          },
+        };
+      }
+      return {
+        body: {
+          option_contracts: [
+            { symbol: "SPY260619P00705000", expiration_date: "2026-06-19", strike_price: "705", type: "put", status: "active", tradable: true },
+          ],
+          next_page_token: null,
+        },
+      };
+    }) as any;
+
+    const c = newClient();
+    const contracts = await c.listOptionContracts("SPY", "P", "2026-05-11", "2026-08-19", 600, 800);
+    expect(contracts).toHaveLength(2);
+    expect(call).toBe(2);
+  });
+});
+
 describe("AlpacaClient.placeMultiLegOrder TIMEOUT cancel (KOH-466)", () => {
   let originalFetch: typeof fetch;
   beforeEach(() => { originalFetch = global.fetch; });

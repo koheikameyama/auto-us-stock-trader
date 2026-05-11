@@ -35,6 +35,36 @@ const ENTRY_REASONS = [
   "SKIP_INVALID_STRIKE",
 ] as const;
 
+/**
+ * テストで signal-generator が選びそうな strike を全部含む密な put listing を作る。
+ * spot 480 / VIX 15 で ~30 DTE のショート strike は 450 前後に出るので、
+ * 420 〜 490 を $1 刻みで広めに用意する。
+ */
+function makeDenseSpyChain(today: string = "2026-05-01"): {
+  occSymbol: string; strike: number; expiry: string; right: "P" | "C";
+  bid: number | null; ask: number | null; delta: number | null; gamma: number | null; impliedVol: number | null;
+}[] {
+  const contracts: any[] = [];
+  // 14 週間ぶんの金曜 = signal-generator が tradingDays から選ぶ候補
+  for (let w = 1; w <= 14; w++) {
+    const expiry = new Date(today);
+    // signal-generator は entry+30d 近傍を選ぶので、当日から 7d, 14d, ... 経過した金曜列で十分
+    expiry.setUTCDate(expiry.getUTCDate() + w * 7);
+    const exp = expiry.toISOString().slice(0, 10);
+    for (let k = 420; k <= 490; k++) {
+      const strikePart = String(k * 1000).padStart(8, "0");
+      contracts.push({
+        occSymbol: `SPY${exp.slice(2).replace(/-/g, "")}P${strikePart}`,
+        strike: k,
+        expiry: exp,
+        right: "P",
+        bid: null, ask: null, delta: null, gamma: null, impliedVol: null,
+      });
+    }
+  }
+  return contracts;
+}
+
 function makeMockAlpaca(overrides: Partial<Record<string, any>> = {}) {
   return {
     connect: vi.fn().mockResolvedValue(undefined),
@@ -51,6 +81,7 @@ function makeMockAlpaca(overrides: Partial<Record<string, any>> = {}) {
     getPositions: vi.fn().mockResolvedValue([]),
     getOpenOrders: vi.fn().mockResolvedValue([]),
     getMarketPrice: vi.fn().mockResolvedValue({ bid: 480, ask: 480.05, last: null }),
+    listOptionContracts: vi.fn().mockResolvedValue(makeDenseSpyChain()),
     placeMultiLegOrder: vi.fn().mockResolvedValue({
       orderId: "alpaca-test-order",
       status: "FILLED",
@@ -278,6 +309,58 @@ describe("runDailyCycle integration", () => {
     });
 
     expect(mockAlpaca.placeMultiLegOrder).toHaveBeenCalledTimes(1); // ENTRY 通る
+  });
+
+  it("skips entry with SKIP_NO_CONTRACTS when Alpaca returns 0 option contracts", async () => {
+    mockGspcMap = buildLinearGspc(4500, 5, 50, new Date(Date.UTC(2026, 2, 1)));
+
+    const mockAlpaca = makeMockAlpaca({
+      listOptionContracts: vi.fn().mockResolvedValue([]),
+    });
+    const { runDailyCycle } = await import("../daily-runner");
+
+    await runDailyCycle({
+      alpaca: mockAlpaca as any,
+      prisma,
+      today: "2026-05-01",
+      dryRun: false,
+    });
+
+    expect(mockAlpaca.placeMultiLegOrder).not.toHaveBeenCalled();
+    const entrySignal = await prisma.signalLog.findFirst({ where: { signalType: "ENTRY" } });
+    expect(entrySignal?.reason).toBe("SKIP_NO_CONTRACTS");
+    const snap = await prisma.dailyEquitySnapshot.findUnique({ where: { date: new Date("2026-05-01") } });
+    expect(snap).toBeTruthy();
+  });
+
+  it("snaps signal strikes to Alpaca listing before placing order (SKIP_STRIKE_UNAVAILABLE if too far)", async () => {
+    mockGspcMap = buildLinearGspc(4500, 5, 50, new Date(Date.UTC(2026, 2, 1)));
+
+    // 当 expiry に 1 strike しか listing が無い → long が取れず SKIP
+    const sparseChain = [
+      {
+        occSymbol: "SPY260605P00450000",
+        strike: 450, expiry: "2026-06-05", right: "P" as const,
+        bid: null, ask: null, delta: null, gamma: null, impliedVol: null,
+      },
+    ];
+    const mockAlpaca = makeMockAlpaca({
+      listOptionContracts: vi.fn().mockResolvedValue(sparseChain),
+    });
+    const { runDailyCycle } = await import("../daily-runner");
+
+    await runDailyCycle({
+      alpaca: mockAlpaca as any,
+      prisma,
+      today: "2026-05-01",
+      dryRun: false,
+    });
+
+    expect(mockAlpaca.placeMultiLegOrder).not.toHaveBeenCalled();
+    const skipLog = await prisma.signalLog.findFirst({
+      where: { reason: "SKIP_STRIKE_UNAVAILABLE" },
+    });
+    expect(skipLog).toBeTruthy();
   });
 
   it("skips cycle when VIX is unavailable from DB", async () => {

@@ -207,6 +207,61 @@ export class AlpacaClient {
   }
 
   /**
+   * Forward 期間 [fromDate, toDate] の listing 済み option 契約を一括取得。
+   *
+   * - 日次 daily-runner が「Alpaca に実在する expiry / strike」を把握するのに使う。
+   * - Greeks や quote は付かない（必要なら `getOptionChain` を併用）。
+   * - status=active, tradable のみ。
+   *
+   * `asset not found` (422) 系の rejection を発注前に検出できるよう、
+   * signal-generator が選んだ strike をこのリストにスナップする想定。
+   */
+  async listOptionContracts(
+    underlying: string,
+    right: "P" | "C",
+    fromDate: string,
+    toDate: string,
+    strikeMin: number,
+    strikeMax: number,
+  ): Promise<OptionContract[]> {
+    const type = right === "P" ? "put" : "call";
+    const contracts: OptionContract[] = [];
+    let pageToken: string | undefined;
+    do {
+      const params = new URLSearchParams({
+        underlying_symbols: underlying,
+        type,
+        expiration_date_gte: fromDate,
+        expiration_date_lte: toDate,
+        strike_price_gte: String(strikeMin),
+        strike_price_lte: String(strikeMax),
+        status: "active",
+        limit: "100",
+      });
+      if (pageToken) params.set("page_token", pageToken);
+      const page = await this.request<RawOptionContractPage>(
+        `/options/contracts?${params.toString()}`,
+      );
+      for (const c of page.option_contracts ?? []) {
+        if (c.tradable === false) continue;
+        contracts.push({
+          occSymbol: c.symbol,
+          strike: Number(c.strike_price),
+          expiry: c.expiration_date,
+          right: c.type === "put" ? "P" : "C",
+          bid: null,
+          ask: null,
+          delta: null,
+          gamma: null,
+          impliedVol: null,
+        });
+      }
+      pageToken = page.next_page_token ?? undefined;
+    } while (pageToken);
+    return contracts;
+  }
+
+  /**
    * SPY (or any underlying) のオプションチェーンを取得。
    * `atmStrike ± 20` の strike で `right` 側のみフィルタ。
    * Greeks (delta/gamma/iv) と quote (bid/ask) は snapshots API から付加。
