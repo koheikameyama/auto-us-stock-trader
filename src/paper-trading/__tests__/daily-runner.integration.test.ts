@@ -82,6 +82,7 @@ function makeMockAlpaca(overrides: Partial<Record<string, any>> = {}) {
     getOpenOrders: vi.fn().mockResolvedValue([]),
     getMarketPrice: vi.fn().mockResolvedValue({ bid: 480, ask: 480.05, last: null }),
     listOptionContracts: vi.fn().mockResolvedValue(makeDenseSpyChain()),
+    getOptionSnapshots: vi.fn().mockResolvedValue(new Map()),
     placeMultiLegOrder: vi.fn().mockResolvedValue({
       orderId: "alpaca-test-order",
       status: "FILLED",

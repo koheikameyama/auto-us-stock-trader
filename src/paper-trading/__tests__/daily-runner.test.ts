@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { snapStrikesToChain } from "../daily-runner";
+import { snapStrikesToChain, decideLimitCredit } from "../daily-runner";
 
 describe("snapStrikesToChain", () => {
   it("理想 strike が listing にちょうど存在する場合はそのまま返す", () => {
@@ -74,5 +74,77 @@ describe("snapStrikesToChain", () => {
     // 475 と最も近い strike で snappedShort より小さい → 475.5
     expect(r.snappedLong).toBe(475.5);
     expect(r.snappedWidth).toBe(4);
+  });
+});
+
+describe("decideLimitCredit", () => {
+  it("両 leg の bid/ask が揃っていれば natural mid - haircut を採用", () => {
+    const r = decideLimitCredit({
+      shortQuote: { bid: 1.20, ask: 1.30 }, // mid 1.25
+      longQuote: { bid: 0.20, ask: 0.30 },  // mid 0.25
+      bsCredit: 1.50,                       // BS は使わない
+    });
+    expect(r.source).toBe("quote");
+    expect(r.quoteCredit).toBeCloseTo(1.00);
+    expect(r.shortMid).toBeCloseTo(1.25);
+    expect(r.longMid).toBeCloseTo(0.25);
+    expect(r.limit).toBeCloseTo(0.98); // 1.00 - 0.02 haircut
+  });
+
+  it("haircut / minLimit はオーバーライド可能", () => {
+    const r = decideLimitCredit({
+      shortQuote: { bid: 1.20, ask: 1.30 },
+      longQuote: { bid: 0.20, ask: 0.30 },
+      bsCredit: 1.50,
+      midHaircut: 0.05,
+      minLimit: 0.10,
+    });
+    expect(r.limit).toBeCloseTo(0.95);
+  });
+
+  it("haircut で 0 を割り込んだら minLimit に張り付く", () => {
+    const r = decideLimitCredit({
+      shortQuote: { bid: 0.10, ask: 0.12 }, // mid 0.11
+      longQuote: { bid: 0.05, ask: 0.07 },  // mid 0.06
+      bsCredit: 0.20,
+    });
+    expect(r.source).toBe("quote");
+    expect(r.quoteCredit).toBeCloseTo(0.05);
+    expect(r.limit).toBeCloseTo(0.03); // max(0.01, 0.05 - 0.02)
+  });
+
+  it("どちらかの bid が欠損なら BS にフォールバック", () => {
+    const r = decideLimitCredit({
+      shortQuote: { bid: null, ask: 1.30 },
+      longQuote: { bid: 0.20, ask: 0.30 },
+      bsCredit: 1.50,
+    });
+    expect(r.source).toBe("bs");
+    expect(r.limit).toBe(1.50);
+    expect(r.quoteCredit).toBeNull();
+  });
+
+  it("どちらかの quote が null そのものでも BS にフォールバック", () => {
+    const r = decideLimitCredit({
+      shortQuote: null,
+      longQuote: { bid: 0.20, ask: 0.30 },
+      bsCredit: 1.50,
+    });
+    expect(r.source).toBe("bs");
+    expect(r.limit).toBe(1.50);
+  });
+
+  it("quote が反転 (shortMid <= longMid) なら BS にフォールバック", () => {
+    const r = decideLimitCredit({
+      shortQuote: { bid: 0.20, ask: 0.30 }, // mid 0.25
+      longQuote: { bid: 1.20, ask: 1.30 },  // mid 1.25
+      bsCredit: 0.80,
+    });
+    expect(r.source).toBe("bs");
+    expect(r.limit).toBe(0.80);
+    // 観測用に mid 自体は埋めて返す（quoteCredit のみ null）
+    expect(r.shortMid).toBeCloseTo(0.25);
+    expect(r.longMid).toBeCloseTo(1.25);
+    expect(r.quoteCredit).toBeNull();
   });
 });

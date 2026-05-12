@@ -41,7 +41,9 @@ const JOBS: JobSpec[] = [
   {
     title: "auto-us-stock-trader paper-trading daily",
     workflowFile: "paper-trading-daily.yml",
-    schedule: { hours: [9], minutes: [35], wdays: [1, 2, 3, 4, 5] }, // NY 09:35 平日
+    // NY 10:00 平日。寄り直後 (09:30-09:45) は spread が広く quote が荒れて
+    // limit が touch されにくいので、opening rotation を避けて 30 分後に発注。
+    schedule: { hours: [10], minutes: [0], wdays: [1, 2, 3, 4, 5] },
   },
   {
     title: "auto-us-stock-trader us-daily backfill",
