@@ -20,7 +20,7 @@ export interface AlpacaClientConfig {
   /** Market-data API base (no trailing version). default: https://data.alpaca.markets */
   dataUrl?: string;
   fetchTimeoutMs?: number;
-  /** Order-fill polling timeout (default 5 min). Override for tests. */
+  /** Order-fill polling timeout (default 10 min). Override for tests. */
   pollTimeoutMs?: number;
   /** Initial poll interval (default 1 s). Override for tests. */
   pollIntervalMs?: number;
@@ -62,6 +62,14 @@ export interface OptionContract {
   strike: number;
   expiry: string; // YYYY-MM-DD
   right: "P" | "C";
+  bid: number | null;
+  ask: number | null;
+  delta: number | null;
+  gamma: number | null;
+  impliedVol: number | null;
+}
+
+export interface OptionSnapshot {
   bid: number | null;
   ask: number | null;
   delta: number | null;
@@ -144,7 +152,7 @@ export class AlpacaClient {
       baseUrl: config.baseUrl.replace(/\/+$/, ""),
       dataUrl: (config.dataUrl ?? DEFAULT_DATA_URL).replace(/\/+$/, ""),
       fetchTimeoutMs: config.fetchTimeoutMs ?? 10_000,
-      pollTimeoutMs: config.pollTimeoutMs ?? 5 * 60 * 1000,
+      pollTimeoutMs: config.pollTimeoutMs ?? 10 * 60 * 1000,
       pollIntervalMs: config.pollIntervalMs ?? 1_000,
     };
   }
@@ -319,15 +327,20 @@ export class AlpacaClient {
     return contracts;
   }
 
-  private async attachSnapshots(
-    _underlying: string,
-    contracts: OptionContract[],
-  ): Promise<void> {
-    const bySymbol = new Map(contracts.map((c) => [c.occSymbol, c]));
-    const symbols = [...bySymbol.keys()];
+  /**
+   * Fetch latest bid/ask + greeks for the given OCC symbols.
+   *
+   * Returns a map keyed by occSymbol. Symbols missing from the broker response
+   * are simply absent from the map (no placeholder entries).
+   */
+  async getOptionSnapshots(
+    occSymbols: string[],
+  ): Promise<Map<string, OptionSnapshot>> {
+    const out = new Map<string, OptionSnapshot>();
+    if (occSymbols.length === 0) return out;
     const chunkSize = 100;
-    for (let i = 0; i < symbols.length; i += chunkSize) {
-      const chunk = symbols.slice(i, i + chunkSize);
+    for (let i = 0; i < occSymbols.length; i += chunkSize) {
+      const chunk = occSymbols.slice(i, i + chunkSize);
       const params = new URLSearchParams({ symbols: chunk.join(",") });
       const r = await this.request<RawOptionSnapshotsResponse>(
         `/v1beta1/options/snapshots?${params.toString()}`,
@@ -336,19 +349,37 @@ export class AlpacaClient {
       const snaps = r.snapshots ?? {};
       for (const sym of chunk) {
         const s = snaps[sym];
-        const c = bySymbol.get(sym);
-        if (!c || !s) continue;
-        c.bid = positiveOrNull(s.latestQuote?.bp);
-        c.ask = positiveOrNull(s.latestQuote?.ap);
-        c.delta = s.greeks?.delta ?? null;
-        c.gamma = s.greeks?.gamma ?? null;
-        c.impliedVol = s.impliedVolatility ?? null;
+        if (!s) continue;
+        out.set(sym, {
+          bid: positiveOrNull(s.latestQuote?.bp),
+          ask: positiveOrNull(s.latestQuote?.ap),
+          delta: s.greeks?.delta ?? null,
+          gamma: s.greeks?.gamma ?? null,
+          impliedVol: s.impliedVolatility ?? null,
+        });
       }
+    }
+    return out;
+  }
+
+  private async attachSnapshots(
+    _underlying: string,
+    contracts: OptionContract[],
+  ): Promise<void> {
+    const snaps = await this.getOptionSnapshots(contracts.map((c) => c.occSymbol));
+    for (const c of contracts) {
+      const s = snaps.get(c.occSymbol);
+      if (!s) continue;
+      c.bid = s.bid;
+      c.ask = s.ask;
+      c.delta = s.delta;
+      c.gamma = s.gamma;
+      c.impliedVol = s.impliedVol;
     }
   }
 
   /**
-   * Place a multi-leg (mleg) order. Polls until terminal state or 5 min timeout.
+   * Place a multi-leg (mleg) order. Polls until terminal state or `pollTimeoutMs` (default 10 min).
    *
    * Sign convention for `limitPrice`:
    *   - Negative = net credit (e.g. selling a put credit spread)
@@ -442,11 +473,12 @@ export class AlpacaClient {
     // resting order does not survive into the next daily cycle and cause a
     // duplicate entry. Cancel failures (already filled, already canceled) are
     // intentionally swallowed — the caller treats this as TIMEOUT either way.
-    let cancelMessage = "Order fill confirmation timed out (5 min); cancel attempted";
+    const timeoutLabel = `${Math.round(timeoutMs / 60_000)} min`;
+    let cancelMessage = `Order fill confirmation timed out (${timeoutLabel}); cancel attempted`;
     try {
       await this.cancelOrder(orderId);
     } catch (e) {
-      cancelMessage = `Order fill confirmation timed out (5 min); cancel failed: ${e instanceof Error ? e.message : String(e)}`;
+      cancelMessage = `Order fill confirmation timed out (${timeoutLabel}); cancel failed: ${e instanceof Error ? e.message : String(e)}`;
     }
     return {
       orderId,

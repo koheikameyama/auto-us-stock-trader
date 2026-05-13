@@ -27,7 +27,7 @@ import { generateEntrySignal } from "../backtest/credit-spread/signal-generator"
 import { US_CREDIT_SPREAD_DEFAULTS } from "../backtest/us/us-credit-spread-config";
 import type { SimulatedSpread } from "../backtest/us/us-credit-spread-types";
 import { fetchIndexFromDB } from "../backtest/data-fetcher";
-import { placeNewSpreadOrder, closeSpreadOrder, expirePosition } from "./order-manager";
+import { placeNewSpreadOrder, closeSpreadOrder, expirePosition, buildOccSymbol } from "./order-manager";
 import { getRegimeMultiplier, scaleContracts } from "./regime-multiplier";
 import {
   sendSlack,
@@ -103,6 +103,60 @@ export function snapStrikesToChain(params: {
     snappedLong,
     snappedWidth: snappedShort - snappedLong,
   };
+}
+
+export interface LimitPricingInput {
+  shortQuote: { bid: number | null; ask: number | null } | null;
+  longQuote: { bid: number | null; ask: number | null } | null;
+  /** Theoretical credit from BS — used as fallback when quote-based pricing is unavailable. */
+  bsCredit: number;
+  /** How much to give up vs natural mid (default $0.02). */
+  midHaircut?: number;
+  /** Minimum acceptable limit credit (default $0.01). */
+  minLimit?: number;
+}
+
+export interface LimitPricingResult {
+  limit: number;
+  source: "quote" | "bs";
+  quoteCredit: number | null;
+  shortMid: number | null;
+  longMid: number | null;
+}
+
+/**
+ * Limit credit を決める。
+ *
+ * 両 leg の bid/ask が揃っていれば natural mid - haircut を採用（"quote" source）。
+ * 片方でも欠損 / 異常（mid 反転 = quoteCredit <= 0）なら BS 理論値に fallback。
+ *
+ * 理由: BS-flat-IV は OTM put credit spread の real market mid を skew で
+ * 過大評価しがちで、それを limit にすると市場が touch しない。実 quote を
+ * 見れば skew が price に織り込まれた mid に乗れる。
+ */
+export function decideLimitCredit(input: LimitPricingInput): LimitPricingResult {
+  const { shortQuote, longQuote, bsCredit, midHaircut = 0.02, minLimit = 0.01 } = input;
+  const shortMid =
+    shortQuote && shortQuote.bid != null && shortQuote.ask != null
+      ? (shortQuote.bid + shortQuote.ask) / 2
+      : null;
+  const longMid =
+    longQuote && longQuote.bid != null && longQuote.ask != null
+      ? (longQuote.bid + longQuote.ask) / 2
+      : null;
+  if (shortMid != null && longMid != null) {
+    const quoteCredit = shortMid - longMid;
+    if (quoteCredit > 0) {
+      return {
+        limit: Math.max(minLimit, quoteCredit - midHaircut),
+        source: "quote",
+        quoteCredit,
+        shortMid,
+        longMid,
+      };
+    }
+  }
+  return { limit: bsCredit, source: "bs", quoteCredit: null, shortMid, longMid };
 }
 
 export interface DailyCycleDeps {
@@ -571,8 +625,60 @@ async function evaluateAndPlaceEntry(deps: EntryEvaluationDeps): Promise<void> {
     );
   }
 
-  console.log(`Placing order: SPY ${signal.expirationDate} P ${shortStrike}/${longStrike}, credit ~$${estimatedCredit.toFixed(2)}, contracts=${finalContracts}`);
+  // ── 実 quote ベースで limit credit を決定（BS 理論は fallback）──
+  // signal-generator は VIX を flat IV とする BS で credit を出すが、OTM put
+  // credit spread では skew で real market mid < BS mid になりがちで、その
+  // limit のままだと市場が touch せず TIMEOUT する。実 broker quote を見て
+  // natural mid - $0.02 で発注するほうが fill 率が高い。
   const expiryYYYYMMDD = signal.expirationDate.replace(/-/g, "");
+  const shortOcc = buildOccSymbol("SPY", expiryYYYYMMDD, "P", shortStrike);
+  const longOcc = buildOccSymbol("SPY", expiryYYYYMMDD, "P", longStrike);
+  let snaps: Awaited<ReturnType<typeof alpaca.getOptionSnapshots>>;
+  try {
+    snaps = await withRetry(
+      () => alpaca.getOptionSnapshots([shortOcc, longOcc]),
+      { retries: 2, intervalMs: 3_000 },
+    );
+  } catch (e: any) {
+    console.warn(`⚠ getOptionSnapshots failed: ${e.message ?? e} — falling back to BS theoretical`);
+    snaps = new Map();
+  }
+  const shortSnap = snaps.get(shortOcc) ?? null;
+  const longSnap = snaps.get(longOcc) ?? null;
+  const pricing = decideLimitCredit({
+    shortQuote: shortSnap,
+    longQuote: longSnap,
+    bsCredit: estimatedCredit,
+  });
+  await prisma.signalLog.create({
+    data: {
+      date: new Date(today),
+      signalType: "ENTRY_PRICING",
+      reason: pricing.source,
+      details: {
+        shortStrike,
+        longStrike,
+        expirationDate: signal.expirationDate,
+        bsCredit: estimatedCredit,
+        quoteCredit: pricing.quoteCredit,
+        limit: pricing.limit,
+        shortBid: shortSnap?.bid ?? null,
+        shortAsk: shortSnap?.ask ?? null,
+        longBid: longSnap?.bid ?? null,
+        longAsk: longSnap?.ask ?? null,
+        shortMid: pricing.shortMid,
+        longMid: pricing.longMid,
+        midHaircut: 0.02,
+      },
+    },
+  });
+  const limitCredit = pricing.limit;
+  console.log(
+    `Pricing: source=${pricing.source}, bs=$${estimatedCredit.toFixed(2)}, ` +
+      `quoteCredit=${pricing.quoteCredit?.toFixed(2) ?? "-"}, limit=$${limitCredit.toFixed(2)}`,
+  );
+
+  console.log(`Placing order: SPY ${signal.expirationDate} P ${shortStrike}/${longStrike}, limit ~$${limitCredit.toFixed(2)}, contracts=${finalContracts}`);
   try {
     const placed = await placeNewSpreadOrder(
       alpaca,
@@ -583,7 +689,7 @@ async function evaluateAndPlaceEntry(deps: EntryEvaluationDeps): Promise<void> {
         longStrike,
         expiry: expiryYYYYMMDD,
         contracts: finalContracts,
-        estimatedCredit,
+        estimatedCredit: limitCredit,
       },
       { dryRun },
     );

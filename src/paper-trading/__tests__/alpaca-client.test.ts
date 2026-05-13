@@ -256,3 +256,94 @@ describe("AlpacaClient.placeMultiLegOrder TIMEOUT cancel (KOH-466)", () => {
     expect(result.message).toMatch(/cancel failed/);
   });
 });
+
+describe("AlpacaClient.getOptionSnapshots", () => {
+  let originalFetch: typeof fetch;
+  beforeEach(() => { originalFetch = global.fetch; });
+  afterEach(() => { global.fetch = originalFetch; });
+
+  it("returns a map keyed by OCC symbol with bid/ask/greeks", async () => {
+    let seenUrl = "";
+    global.fetch = makeFetchMock(({ url }) => {
+      seenUrl = url;
+      return {
+        body: {
+          snapshots: {
+            SPY260619P00708000: {
+              latestQuote: { bp: 1.20, ap: 1.30 },
+              greeks: { delta: -0.18, gamma: 0.04 },
+              impliedVolatility: 0.22,
+            },
+            SPY260619P00703000: {
+              latestQuote: { bp: 0.80, ap: 0.90 },
+              greeks: { delta: -0.12 },
+              impliedVolatility: 0.24,
+            },
+          },
+        },
+      };
+    }) as any;
+
+    const c = newClient();
+    const snaps = await c.getOptionSnapshots([
+      "SPY260619P00708000",
+      "SPY260619P00703000",
+    ]);
+
+    expect(seenUrl).toContain("/v1beta1/options/snapshots");
+    expect(seenUrl).toContain("symbols=SPY260619P00708000%2CSPY260619P00703000");
+    expect(snaps.size).toBe(2);
+    expect(snaps.get("SPY260619P00708000")).toEqual({
+      bid: 1.20, ask: 1.30, delta: -0.18, gamma: 0.04, impliedVol: 0.22,
+    });
+    expect(snaps.get("SPY260619P00703000")?.bid).toBe(0.80);
+  });
+
+  it("symbols missing from broker response are absent from the map", async () => {
+    global.fetch = makeFetchMock(() => ({
+      body: {
+        snapshots: {
+          SPY260619P00708000: { latestQuote: { bp: 1.20, ap: 1.30 } },
+          // 703 strike missing
+        },
+      },
+    })) as any;
+
+    const c = newClient();
+    const snaps = await c.getOptionSnapshots([
+      "SPY260619P00708000",
+      "SPY260619P00703000",
+    ]);
+
+    expect(snaps.has("SPY260619P00708000")).toBe(true);
+    expect(snaps.has("SPY260619P00703000")).toBe(false);
+  });
+
+  it("non-positive bid/ask are normalized to null", async () => {
+    global.fetch = makeFetchMock(() => ({
+      body: {
+        snapshots: {
+          SPY260619P00708000: {
+            latestQuote: { bp: 0, ap: -1 }, // both invalid
+          },
+        },
+      },
+    })) as any;
+
+    const c = newClient();
+    const snaps = await c.getOptionSnapshots(["SPY260619P00708000"]);
+    const s = snaps.get("SPY260619P00708000");
+    expect(s?.bid).toBeNull();
+    expect(s?.ask).toBeNull();
+  });
+
+  it("empty input returns empty map without hitting the network", async () => {
+    const fetchSpy = vi.fn();
+    global.fetch = fetchSpy as any;
+
+    const c = newClient();
+    const snaps = await c.getOptionSnapshots([]);
+    expect(snaps.size).toBe(0);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
