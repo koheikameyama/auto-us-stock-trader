@@ -353,8 +353,12 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
   openPositionCount += pendingEntryCount;
 
   // ── 6. equity 計算 + DD stop 状態遷移 ──
+  // Alpaca の `equity` は cash + 開ポジの mark-to-market を含む値。
+  // cash と positionsValue を分けて保存することで、credit spread の
+  // 含み損益（spread を買い戻すコスト）が日次で観測できるようになる。
   const netLiq = accountSummary.netLiquidation;
-  const positionsValue = 0;
+  const cashValue = accountSummary.totalCashValue;
+  const positionsValue = netLiq - cashValue;
   const totalEquity = netLiq;
 
   const lastSnapshot = await prisma.dailyEquitySnapshot.findFirst({
@@ -445,7 +449,7 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
     where: { date: new Date(today) },
     create: {
       date: new Date(today),
-      cash: netLiq,
+      cash: cashValue,
       positionsValue,
       totalEquity,
       openPositionCount,
@@ -454,7 +458,7 @@ export async function runDailyCycle(deps: DailyCycleDeps): Promise<void> {
       ddStopActivatedDate: ddState.ddStopActivatedDate ? new Date(ddState.ddStopActivatedDate) : null,
     },
     update: {
-      cash: netLiq,
+      cash: cashValue,
       positionsValue,
       totalEquity,
       openPositionCount,

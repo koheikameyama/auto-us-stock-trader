@@ -150,6 +150,39 @@ describe("runDailyCycle integration", () => {
     expect(mockAlpaca.placeMultiLegOrder).not.toHaveBeenCalled();
   });
 
+  it("snapshot 分解: cash + positionsValue ≡ totalEquity (含み損益が positionsValue に反映される)", async () => {
+    // Alpaca paper では credit spread をオープン中 → 受領クレジット分 cash が増え、
+    // 開ポジの mark-to-market は (買い戻しコストの) 負値になる。
+    // ex: 初期 cash 100,073 (=100,000 + $73 クレジット), 開ポジ MTM = -$60 (含み益 $13)
+    //     equity = 100,073 + (-60) = 100,013
+    mockGspcMap = buildLinearGspc(4500, 5, 50, new Date(Date.UTC(2026, 2, 1)));
+
+    const mockAlpaca = makeMockAlpaca({
+      getAccountSummary: vi.fn().mockResolvedValue({
+        netLiquidation: 100_013,
+        totalCashValue: 100_073,
+        buyingPower: 400_000,
+        availableFunds: 100_000,
+      }),
+    });
+    const { runDailyCycle } = await import("../daily-runner");
+
+    await runDailyCycle({
+      alpaca: mockAlpaca as any,
+      prisma,
+      today: "2026-05-01",
+      dryRun: true,
+    });
+
+    const snap = await prisma.dailyEquitySnapshot.findUnique({ where: { date: new Date("2026-05-01") } });
+    expect(snap).toBeTruthy();
+    expect(snap?.cash).toBe(100_073);
+    expect(snap?.positionsValue).toBeCloseTo(-60, 5);
+    expect(snap?.totalEquity).toBe(100_013);
+    // invariant: cash + positionsValue == totalEquity
+    expect((snap!.cash + snap!.positionsValue)).toBeCloseTo(snap!.totalEquity, 5);
+  });
+
   it("live cycle (dryRun=false) with UP-trend GSPC: places mleg order and creates OPEN Position", async () => {
     mockGspcMap = buildLinearGspc(4500, 5, 50, new Date(Date.UTC(2026, 2, 1)));
 
