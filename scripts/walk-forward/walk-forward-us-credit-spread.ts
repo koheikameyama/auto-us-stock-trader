@@ -134,6 +134,12 @@ async function main() {
   const endDate = dayjs().format("YYYY-MM-DD");
   const startDate = dayjs().subtract(TOTAL_MONTHS, "month").format("YYYY-MM-DD");
 
+  // 実 fill 相当のクレジット薄さを再現する倍率（--credit-scale 0.745 で幅の~14%）
+  const csIdx = process.argv.indexOf("--credit-scale");
+  const creditScale = csIdx >= 0 && csIdx + 1 < process.argv.length
+    ? Number(process.argv[csIdx + 1])
+    : (US_CREDIT_SPREAD_DEFAULTS.creditScale ?? 1);
+
   console.log("=".repeat(70));
   console.log("SPY Credit Spread Walk-Forward 分析");
   console.log("=".repeat(70));
@@ -141,6 +147,7 @@ async function main() {
   console.log(`IS: ${IS_MONTHS}ヶ月 / OOS: ${OOS_MONTHS}ヶ月 / スライド: ${SLIDE_MONTHS}ヶ月`);
   console.log(`ウィンドウ数: ${NUM_WINDOWS}`);
   console.log(`選択方式: ロバスト（近傍中央値PF）`);
+  console.log(`Credit Scale: ${creditScale.toFixed(3)} (1.0 = BS理論どおり)`);
 
   const paramCombos = generateUSCreditSpreadParameterCombinations();
   console.log(`パラメータ組み合わせ: ${paramCombos.length}通り\n`);
@@ -167,6 +174,7 @@ async function main() {
         ...params,
         startDate: isStart,
         endDate: isEnd,
+        creditScale,
         verbose: false,
       };
       const result = await runUSCreditSpreadBacktest(config, gspc, vix);
@@ -201,6 +209,7 @@ async function main() {
       ...bestParams,
       startDate: oosStart,
       endDate: oosEnd,
+      creditScale,
       verbose: false,
     };
     const oosResult = await runUSCreditSpreadBacktest(oosConfig, gspc, vix);
