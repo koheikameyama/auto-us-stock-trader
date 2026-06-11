@@ -35,6 +35,8 @@ export interface USCreditSpreadBacktestConfig {
   riskFreeRate: number;
   /** VIX→IV調整倍率 */
   ivScaleFactor: number;
+  /** 受領クレジット倍率（実 fill が BS 理論より薄い分を再現。未指定=1.0） */
+  creditScale?: number;
 
   /** 同時保有スプレッド上限 */
   maxPositions: number;

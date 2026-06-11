@@ -235,10 +235,12 @@ export async function runUSCreditSpreadBacktest(
         const finalContracts = Math.floor(config.contractsPerSpread * multiplier);
 
         if (finalContracts > 0) {
+          // 実 fill は BS 理論クレジットより薄い → creditScale で割り引いて再現
+          const entryCredit = signal.estimatedCredit * (config.creditScale ?? 1);
           const collateralRequired = config.spreadWidth * CONTRACT_SIZE * finalContracts;
           const entryCommission = config.optionsCommission * 2 * finalContracts;
           cash -= collateralRequired;
-          cash += signal.estimatedCredit * CONTRACT_SIZE * finalContracts;
+          cash += entryCredit * CONTRACT_SIZE * finalContracts;
           cash -= entryCommission;
 
           const newSpread: SimulatedSpread = {
@@ -250,7 +252,7 @@ export async function runUSCreditSpreadBacktest(
             shortStrike: signal.shortStrike,
             longStrike: signal.longStrike,
             shortDeltaAtEntry: signal.shortDelta,
-            creditReceived: signal.estimatedCredit,
+            creditReceived: entryCredit,
             contracts: finalContracts,
             state: "OPEN",
             totalCommissions: entryCommission,

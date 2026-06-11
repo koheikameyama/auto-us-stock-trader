@@ -42,6 +42,7 @@ async function main() {
   const shortDelta = getArg("short-delta") ? Number(getArg("short-delta")) : US_CREDIT_SPREAD_DEFAULTS.shortPutDelta;
   const spreadWidth = getArg("spread-width") ? Number(getArg("spread-width")) : US_CREDIT_SPREAD_DEFAULTS.spreadWidth;
   const profitTarget = getArg("profit-target") ? Number(getArg("profit-target")) : US_CREDIT_SPREAD_DEFAULTS.profitTarget;
+  const creditScale = getArg("credit-scale") ? Number(getArg("credit-scale")) : (US_CREDIT_SPREAD_DEFAULTS.creditScale ?? 1);
 
   const config: USCreditSpreadBacktestConfig = {
     ...US_CREDIT_SPREAD_DEFAULTS,
@@ -52,6 +53,7 @@ async function main() {
     shortPutDelta: shortDelta,
     spreadWidth,
     profitTarget,
+    creditScale,
     verbose,
   };
 
@@ -62,6 +64,7 @@ async function main() {
   console.log(`Budget: $${budget.toLocaleString()}`);
   console.log(`Underlying: ${config.underlyingSymbol} (^GSPC ÷ 10 proxy)`);
   console.log(`Short Delta: ${config.shortPutDelta} | Spread Width: $${config.spreadWidth} | DTE: ${config.dte}`);
+  console.log(`Credit Scale: ${(config.creditScale ?? 1).toFixed(3)} (1.0 = BS理論どおり)`);
   console.log(`Profit Target: ${(config.profitTarget * 100).toFixed(0)}% | StopLoss Mult: ${config.stopLossMultiplier || "OFF"}`);
   console.log(`Max Positions: ${config.maxPositions} | Contracts/Spread: ${config.contractsPerSpread}`);
   console.log(`VIX cap: ${config.vixCap} | Index trend SMA: ${config.indexTrendSmaPeriod}`);
