@@ -34,7 +34,8 @@
     "walk-forward:vix-contango": "tsx scripts/walk-forward/walk-forward-us-vix-contango.ts",
     "walk-forward:dual-momentum": "tsx scripts/walk-forward/walk-forward-us-dual-momentum.ts",
     "walk-forward:monthly": "tsx scripts/walk-forward/run-monthly-evaluation.ts",
-    "paper-trading:weekly-report": "tsx src/paper-trading/weekly-report.ts"
+    "paper-trading:weekly-report": "tsx src/paper-trading/weekly-report.ts",
+    "paper-trading:diff-report": "tsx src/paper-trading/diff-report.ts"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
