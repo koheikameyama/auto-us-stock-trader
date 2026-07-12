@@ -1,11 +1,11 @@
-// src/backtest/credit-spread/run-tail-test.ts
+// src/backtest/iron-condor/run-tail-test.ts
 import dayjs from "dayjs";
 import * as fs from "fs";
 import * as path from "path";
-import { US_CREDIT_SPREAD_DEFAULTS, US_CREDIT_SPREAD_BACKTEST_FIDELITY } from "../us/us-credit-spread-config";
-import { runUSCreditSpreadBacktest } from "../us/us-credit-spread-simulation";
+import { US_IRON_CONDOR_DEFAULTS, US_IRON_CONDOR_BACKTEST_FIDELITY } from "../us/us-iron-condor-config";
+import { runUSIronCondorBacktest } from "../us/us-iron-condor-simulation";
 import { fetchSP500FromDB, fetchVixFromDB } from "../us/us-data-fetcher";
-import type { USCreditSpreadBacktestConfig } from "../us/us-credit-spread-types";
+import type { USIronCondorBacktestConfig } from "../us/us-iron-condor-types";
 import { extractDDPeriods } from "../framework/tail-test/dd-extractor";
 import { analyzeWindow, tagDDsWithEvents } from "../framework/tail-test/window-analyzer";
 import { calculateTailMetrics, calculateVixBuckets } from "../framework/tail-test/tail-metrics";
@@ -14,46 +14,46 @@ import { generateMarkdownReport } from "../framework/tail-test/report";
 import { STRESS_WINDOWS } from "../framework/tail-test/stress-windows";
 import type { TailTestResult } from "../framework/tail-test/types";
 import type { Trade, StrategyResult } from "../framework/strategy-result";
-import { CREDIT_SPREAD_THRESHOLDS } from "./tail-test-thresholds";
+import { IRON_CONDOR_THRESHOLDS } from "./tail-test-thresholds";
 
 /**
- * SPY Credit Spread 戦略を実行し StrategyResult を返す（library 用 entry point）。
+ * SPY Iron Condor 戦略を実行し StrategyResult を返す（library 用 entry point）。
  *
  * tail-test や report 生成は呼ばない。Phase 4 portfolio analysis から再利用する。
  */
-export async function runCreditSpreadStrategy(
+export async function runIronCondorStrategy(
   startDate: string,
   endDate: string,
   budget?: number,
 ): Promise<StrategyResult> {
-  const config: USCreditSpreadBacktestConfig = {
-    ...US_CREDIT_SPREAD_DEFAULTS,
-    ...US_CREDIT_SPREAD_BACKTEST_FIDELITY,
+  const config: USIronCondorBacktestConfig = {
+    ...US_IRON_CONDOR_DEFAULTS,
+    ...US_IRON_CONDOR_BACKTEST_FIDELITY,
     startDate,
     endDate,
-    initialBudget: budget ?? US_CREDIT_SPREAD_DEFAULTS.initialBudget,
+    initialBudget: budget ?? US_IRON_CONDOR_DEFAULTS.initialBudget,
     verbose: false,
   };
 
   const gspc = await fetchSP500FromDB(startDate, endDate);
   const vix = await fetchVixFromDB(startDate, endDate);
-  const result = await runUSCreditSpreadBacktest(config, gspc, vix);
+  const result = await runUSIronCondorBacktest(config, gspc, vix);
 
-  const closed = result.spreads.filter((s) => s.state === "CLOSED");
-  const trades: Trade[] = closed.map((s) => ({
-    symbol: s.underlyingSymbol,
-    entryDate: s.entryDate,
-    closeDate: s.closeDate ?? null,
-    netPnl: s.netPnl ?? null,
+  const closed = result.condors.filter((c) => c.state === "CLOSED");
+  const trades: Trade[] = closed.map((c) => ({
+    symbol: c.underlyingSymbol,
+    entryDate: c.entryDate,
+    closeDate: c.closeDate ?? null,
+    netPnl: c.netPnl ?? null,
     pnlPct: null,
     holdingDays: null,
-    category: s.closeReason,
+    category: c.closeReason,
   }));
 
   const initial = config.initialBudget;
 
   return {
-    strategyName: "credit-spread",
+    strategyName: "iron-condor",
     config: { ...config },
     period: { start: startDate, end: endDate },
     initialBudget: initial,
@@ -80,22 +80,24 @@ async function main() {
   const stepLabel = getArg("label");
   const suffix = stepLabel ? `-${stepLabel}` : "";
 
-  const config: USCreditSpreadBacktestConfig = {
-    ...US_CREDIT_SPREAD_DEFAULTS,
-    ...US_CREDIT_SPREAD_BACKTEST_FIDELITY,
+  const config: USIronCondorBacktestConfig = {
+    ...US_IRON_CONDOR_DEFAULTS,
+    ...US_IRON_CONDOR_BACKTEST_FIDELITY,
     startDate,
     endDate,
-    ...(getArg("short-delta") ? { shortPutDelta: Number(getArg("short-delta")) } : {}),
+    ...(getArg("short-delta") ? { shortDelta: Number(getArg("short-delta")) } : {}),
     ...(getArg("dte") ? { dte: Number(getArg("dte")) } : {}),
     ...(getArg("profit-target") ? { profitTarget: Number(getArg("profit-target")) } : {}),
+    ...(getArg("put-slope") ? { putSkewSlope: Number(getArg("put-slope")) } : {}),
+    ...(getArg("call-slope") ? { callSkewSlope: Number(getArg("call-slope")) } : {}),
     verbose: false,
   };
 
   console.log("=".repeat(60));
-  console.log("SPY Credit Spread Tail-Risk Test");
+  console.log("SPY Iron Condor Tail-Risk Test");
   console.log("=".repeat(60));
   console.log(`Period: ${startDate} ~ ${endDate}`);
-  console.log(`Config: δ=${config.shortPutDelta} | DTE=${config.dte} | PT=${(config.profitTarget * 100).toFixed(0)}%`);
+  console.log(`Config: δ=±${config.shortDelta} | DTE=${config.dte} | PT=${(config.profitTarget * 100).toFixed(0)}% | skew put=${config.putSkewSlope}/call=${config.callSkewSlope}`);
 
   console.log("\nLoading data...");
   const gspc = await fetchSP500FromDB(startDate, endDate);
@@ -103,29 +105,27 @@ async function main() {
   console.log(`  ^GSPC: ${gspc.size} days | VIX: ${vix.size} days`);
 
   console.log("\nRunning simulation...");
-  const result = await runUSCreditSpreadBacktest(config, gspc, vix);
+  const result = await runUSIronCondorBacktest(config, gspc, vix);
 
   // ── 後処理 ──
-  const closed = result.spreads.filter((s) => s.state === "CLOSED");
-  // SimulatedSpread → Trade 変換（framework は Trade を期待する）
-  const trades: Trade[] = closed.map((s) => ({
-    symbol: s.underlyingSymbol,
-    entryDate: s.entryDate,
-    closeDate: s.closeDate ?? null,
-    netPnl: s.netPnl ?? null,
+  const closed = result.condors.filter((c) => c.state === "CLOSED");
+  const trades: Trade[] = closed.map((c) => ({
+    symbol: c.underlyingSymbol,
+    entryDate: c.entryDate,
+    closeDate: c.closeDate ?? null,
+    netPnl: c.netPnl ?? null,
     pnlPct: null,
     holdingDays: null,
-    category: s.closeReason,
+    category: c.closeReason,
   }));
 
-  // ── StrategyResult 構築（framework が消費する標準形） ──
   const initial = config.initialBudget;
   const finalEq = result.equityCurve[result.equityCurve.length - 1]?.totalEquity ?? initial;
   const years = result.equityCurve.length / 252;
   const cagr = years > 0 ? Math.pow(finalEq / initial, 1 / years) - 1 : 0;
 
   const strategyResult: StrategyResult = {
-    strategyName: "credit-spread",
+    strategyName: "iron-condor",
     config: { ...config },
     period: { start: startDate, end: endDate },
     initialBudget: initial,
@@ -148,7 +148,6 @@ async function main() {
   const tradingDays = strategyResult.equityCurve.map((e) => e.date);
   const vixBuckets = calculateVixBuckets(tradingDays, vix, strategyResult.trades);
 
-  // 全 stress window の最悪 DD / PnL%
   const available = stressAnalyses.filter((w) => w.dataAvailable);
   const worstWindowDD = available.length === 0 ? null : Math.max(...available.map((w) => w.ddPct));
   const worstWindowPnlPct = available.length === 0 ? null : Math.min(...available.map((w) => w.pnlPct));
@@ -161,17 +160,19 @@ async function main() {
     cvar5: tailMetrics.cvar5,
     worstWindowDD,
     worstWindowPnlPct,
-    maxLossDollar: config.spreadWidth * 100 * config.contractsPerSpread,
-    thresholds: CREDIT_SPREAD_THRESHOLDS,
+    maxLossDollar: config.spreadWidth * 100 * config.contractsPerCondor, // 片側
+    thresholds: IRON_CONDOR_THRESHOLDS,
   });
 
   const tailResult: TailTestResult = {
     configSummary: {
       underlyingSymbol: config.underlyingSymbol,
-      shortPutDelta: config.shortPutDelta,
+      shortDelta: config.shortDelta,
       spreadWidth: config.spreadWidth,
       dte: config.dte,
       profitTarget: config.profitTarget,
+      putSkewSlope: config.putSkewSlope,
+      callSkewSlope: config.callSkewSlope,
       vixCap: config.vixCap,
       indexTrendSmaPeriod: config.indexTrendSmaPeriod,
       initialBudget: config.initialBudget,
@@ -199,26 +200,26 @@ async function main() {
   const outDir = path.resolve("docs/reports");
   fs.mkdirSync(outDir, { recursive: true });
   const today = dayjs().format("YYYY-MM-DD");
-  const reportPath = path.join(outDir, `credit-spread-tail-${today}${suffix}.md`);
-  fs.writeFileSync(reportPath, generateMarkdownReport(tailResult, "SPY Credit Spread"), "utf-8");
+  const reportPath = path.join(outDir, `iron-condor-tail-${today}${suffix}.md`);
+  fs.writeFileSync(reportPath, generateMarkdownReport(tailResult, "SPY Iron Condor"), "utf-8");
 
   // CSV
   fs.writeFileSync(
-    path.join(outDir, `equity-curve-${today}${suffix}.csv`),
+    path.join(outDir, `iron-condor-equity-curve-${today}${suffix}.csv`),
     "date,cash,positionsValue,totalEquity,openPositionCount\n" +
       result.equityCurve.map((e) => `${e.date},${e.cash},${e.positionsValue},${e.totalEquity},${e.openPositionCount}`).join("\n"),
   );
   fs.writeFileSync(
-    path.join(outDir, `spreads-${today}${suffix}.csv`),
-    "entryDate,closeDate,shortStrike,longStrike,credit,closeReason,netPnl\n" +
-      closed.map((s) => `${s.entryDate},${s.closeDate ?? ""},${s.shortStrike},${s.longStrike},${s.creditReceived.toFixed(4)},${s.closeReason ?? ""},${s.netPnl ?? 0}`).join("\n"),
+    path.join(outDir, `iron-condor-condors-${today}${suffix}.csv`),
+    "entryDate,closeDate,putShort,putLong,callShort,callLong,credit,closeReason,netPnl\n" +
+      closed.map((c) => `${c.entryDate},${c.closeDate ?? ""},${c.putShortStrike},${c.putLongStrike},${c.callShortStrike},${c.callLongStrike},${c.creditReceived.toFixed(4)},${c.closeReason ?? ""},${c.netPnl ?? 0}`).join("\n"),
   );
 
   // ── ターミナル出力 ──
   console.log("\n" + "=".repeat(60));
   console.log("Verdict");
   console.log("=".repeat(60));
-  console.log(`Total spreads: ${strategyResult.trades.length}`);
+  console.log(`Total condors: ${strategyResult.trades.length}`);
   for (const c of verdict.checks) {
     const status = c.pass === true ? "[PASS]" : c.pass === false ? "[FAIL]" : "[skip]";
     console.log(`  ${c.name.padEnd(30)} ${String(c.actual).padStart(10)} (≥/≤ ${c.threshold}) ${status}`);

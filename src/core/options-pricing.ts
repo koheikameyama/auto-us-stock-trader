@@ -64,6 +64,20 @@ export function skewedPutIv(baseIv: number, spot: number, strike: number, skewSl
   return baseIv * (1 + skewSlope * otm);
 }
 
+/**
+ * 単調な equity skew を全 strike に適用する（低 strike=高 IV、高 strike=低 IV）。
+ *
+ * skewedPutIv は put（strike<spot）専用でクランプするが、こちらは call を含む
+ * チェーン全体を単調スロープで表現する。Iron Condor など call/put 両側を扱う戦略用。
+ * 低 strike（put）は IV↑、高 strike（call）は IV↓ となり、現実の equity skew に近い。
+ *
+ * @param skewSlope 傾き（0/負=無効、正で低 strike ほど IV↑）
+ */
+export function skewedIvMonotonic(baseIv: number, spot: number, strike: number, skewSlope: number): number {
+  if (!skewSlope || skewSlope <= 0 || spot <= 0) return baseIv;
+  return Math.max(baseIv * (1 + skewSlope * ((spot - strike) / spot)), baseIv * 0.2);
+}
+
 /** コールデルタ: 0〜1 */
 export function bsCallDelta(S: number, K: number, T: number, r: number, sigma: number): number {
   if (T <= 0 || sigma <= 0) return S >= K ? 1 : 0;
