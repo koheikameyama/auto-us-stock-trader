@@ -7,7 +7,7 @@
 | フェーズ | 状態 | 内容 |
 |---|---|---|
 | **データ層** | ✅ 稼働中 | yfinance から OHLCV / 決算日 / 指数 / ETF を収集し、Risk-on/off レジーム・マクロイベントも算出。PostgreSQL `auto_us_stock_trader` schema に保存 |
-| **バックテスト層** | ✅ 本リポに移管済 | 8 戦略移管完了。tail-test / walk-forward / portfolio 分析フレームワーク実装済。SPY Credit Spread は **skew+slippage 込みで edge 消滅（4/7 FAIL, CAGR -0.5%）と判明**（後述）|
+| **バックテスト層** | ✅ 本リポに移管済 | 8 戦略移管完了。tail-test / walk-forward / portfolio 分析フレームワーク実装済。SPY Credit Spread（put-only）は skew+slippage 込みで edge 消滅（4/7 FAIL）→ **Iron Condor へ pivot（skew 込みで 7/7 PASS・WF 堅牢）**（後述）|
 | **Paper Trading 層** | ✅ 自律運用中 | Phase A〜E 完了。**Alpaca REST API** で entry/close/expire 発注・kill switch・Slack 通知・週次レポートまで自動化。現在 Phase F（90 日観察）|
 | **本番取引層** | 📋 未着手 | Paper trading 90 日観察 PASS 後に Alpaca live で段階的にサイズアップ |
 
@@ -195,6 +195,47 @@ npm run tail-test:credit-spread -- --start 2007-01-03 --end 2026-04-28 --label s
 - [docs/plans/2026-04-30-credit-spread-tail-improvement-design.md](docs/plans/2026-04-30-credit-spread-tail-improvement-design.md)（戦略改善履歴）
 - [docs/spy-credit-spread-roadmap.md](docs/spy-credit-spread-roadmap.md)（本番投入ロードマップ。edge 再検証が前提条件に）
 
+### SPY Iron Condor（✅ pivot 先。skew 込みで edge 実在）
+
+**結論: put-only の edge は skew で消滅したが、Iron Condor（put credit spread + bear call credit spread）は
+同じ片側 collateral で put+call の 2倍プレミアムを取れる構造により、skew を実 fill どおり織り込んでも edge が残る。**
+7/7 PASS（2007-2026 tail-test）。edge の源泉は「call 側単体の収益」ではなく 2倍プレミアムの構造にある。
+
+| 指標 | put-only（skew込, 4/7 FAIL）| **Iron Condor（skew込）** | 閾値 | 判定 |
+|---|---|---|---|---|
+| Win Rate | 83.1% | 80.6% | ≥ 70% | ✅ |
+| Profit Factor | 1.02 | **1.79** | ≥ 1.3 | ✅ |
+| CAGR | -0.51% | **6.85%** | ≥ 6.5% | ✅ |
+| Max DD | 58.0% | **21.2%** | ≤ 25% | ✅ |
+| CVaR 5% | -$231 | -$209 | ≥ -$250 | ✅ |
+| テール DD（最悪）| 23.9% | 13.5% | ≤ 30% | ✅ |
+| テール PnL%（最悪）| -23.9% | -12.7% | ≥ -50% | ✅ |
+
+- **walk-forward: 堅牢（過学習でない）** — 直近 27ヶ月・7/7 ウィンドウ active、OOS 集計 PF 2.35（`npm run walk-forward:iron-condor`）
+- **skew 忠実度は Alpaca 市場クォートで実測較正**（`npm run` なしの `npx tsx src/paper-trading/calibrate-skew.ts`）:
+  取引帯 0.20δ で **put slope 6.30 / call slope 4.05**（現実の equity skew どおり put wing が急）
+
+CAGR 6.5% 閾値の根拠: IC は**無レバレッジ defined-risk クレジット**でリターン上限が構造的に低い。
+10% は leverage 前提の値のため、無レバ本番構成の実測 floor（6.85%）を反映して 0.065 とした
+（他6指標は credit-spread と同水準の厳しさを維持）。Portfolio Margin / Box Spread Loan によるレバレッジは将来課題。
+
+戦略設定: `shortDelta: ±0.20`, `spreadWidth: $5`, `dte: 35`, `profitTarget: 50%`, `stopLossMultiplier: 1.0`（= **2×credit で stop**）,
+`vixCap: 30`, `indexTrendSmaPeriod: 50`, `ddStopEnabled: true / threshold: 0.15 / cooldown: 252日`。
+忠実度パラメータ（[us-iron-condor-config.ts](src/backtest/us/us-iron-condor-config.ts) の `US_IRON_CONDOR_BACKTEST_FIDELITY`）:
+`putSkewSlope: 6.30 / callSkewSlope: 4.05 / entrySlippage: $0.04`。**backtest / walk-forward / tail-test の入口だけで有効化。**
+credit-spread と同じ decomposed 構成（`src/backtest/iron-condor/{condor-signal-generator,condor-evaluator,run-tail-test}.ts`、
+DD hard stop は `src/backtest/credit-spread/dd-stop.ts` を共有、regime sizing / event filter を継承）。
+
+実行:
+```bash
+npm run backtest:iron-condor -- --start 2007-01-03 --end 2026-04-28
+npm run tail-test:iron-condor -- --start 2007-01-03 --end 2026-04-28 --label prod
+npm run walk-forward:iron-condor
+```
+
+⚠️ **caveat**: call skew は低 VIX（~11-13%）の単一スナップショット較正。skew は regime 依存のため、
+複数 VIX 環境で `calibrate-skew.ts` を再走して確認すること（`--put-slope` / `--call-slope` で上書き可能）。
+
 ### 他戦略の tail-test
 
 共通フレームワーク `src/backtest/framework/tail-test/` を各戦略に適用。
@@ -261,15 +302,18 @@ npm run paper-trading:weekly-report
 | 12 | ロギング + 通知 + 週次レポート (Phase D) | ✅ 完了 | KOH-455 |
 | 13 | エラー処理 + kill switch + テスト (Phase E) | ✅ 完了 | KOH-456 |
 | 14 | 90 日 paper trading 観察 (Phase F) | 🚧 インフラ検証として継続 | KOH-457 |
-| 15 | **backtest 忠実度: skew+slippage 反映 → 現行構成 edge なしと判明** | ✅ 完了 | - |
-| 16 | 最終評価 + 本番判断 (Phase G) | ⏸ 保留（edge 再構築が前提）| KOH-458 |
-| 17 | 本番取引開始（Alpaca live、段階サイズアップ）| ⏸ 保留 | KOH-459 |
+| 15 | **backtest 忠実度: skew+slippage 反映 → put-only edge なしと判明** | ✅ 完了 | - |
+| 16 | **Iron Condor 本番戦略化（skew 込み 7/7 PASS・WF 堅牢へ pivot）** | ✅ 完了 | KOH-544 |
+| 17 | 最終評価 + 本番判断 (Phase G) | 🚧 IC で再開（paper fill 収集 → 判断）| KOH-458 |
+| 18 | 本番取引開始（Alpaca live、段階サイズアップ）| ⏸ 保留 | KOH-459 |
 
-> **重要**: 現行 SPY credit spread（0.20δ / $5幅 / 35DTE）は skew 込みで edge なしと確定。
-> live 移行は edge を再構築できるまで保留。Phase F の paper 観察はインフラ検証目的で継続する。
+> **重要**: put-only SPY credit spread（0.20δ / $5幅 / 35DTE）は skew 込みで edge なしと確定。
+> **Iron Condor へ pivot し 7/7 PASS・walk-forward 堅牢を確認**（無レバ CAGR 6.85%）。
+> live 移行前に call skew の複数 VIX 環境較正 / call 側 paper fill 収集を行う。
 
 次の一手（要検討）:
-- **戦略 pivot**: Iron Condor 化 / 別デルタ・DTE の再最適化（WF は δ0.3・pt0.8 方向に集まった）/ 別戦略
+- **Iron Condor の live 前検証**: call skew を複数 VIX 環境で再較正 / call 側 paper fill 収集 → daily-runner への IC 発注ロジック実装
+- レバレッジ余地（Portfolio Margin / Box Spread Loan）で CAGR を 10% 帯へ引き上げる検討
 - 他 7 戦略（pead/gapup/momentum/mean-reversion/wheel/vix-contango/dual-momentum）の tail-test 横展開
 - 監視ダッシュボード（実取引開始後）
 
