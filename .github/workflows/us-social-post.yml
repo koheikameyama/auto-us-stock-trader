@@ -1,0 +1,38 @@
+name: US Social Post
+
+# US 市場引け後（16:00 ET ≒ 翌 6:00 JST 前後）に日次 SNS 投稿 + 局面変化アラート。
+# GitHub Actions の cron は UTC 固定で DST 揺れ + 遅延するため、起動は cron-job.org から
+# workflow_dispatch を叩く構成（他の US ワークフローと同方針）。
+on:
+  # schedule:
+  #   - cron: "10 21 * * 1-5"  # 参考: UTC 21:10 = ET 16:10(EST) / 17:10(EDT)
+  workflow_dispatch: {}
+
+jobs:
+  social-post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      BLUESKY_HANDLE: ${{ secrets.BLUESKY_HANDLE }}
+      BLUESKY_APP_PASSWORD: ${{ secrets.BLUESKY_APP_PASSWORD }}
+      THREADS_USER_TOKEN: ${{ secrets.THREADS_USER_TOKEN }}
+      PUBLIC_SITE_URL: ${{ secrets.PUBLIC_SITE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Daily SNS post + regime-change alert
+        run: npx tsx src/jobs/us-social-post.ts
