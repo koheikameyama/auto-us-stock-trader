@@ -85,6 +85,9 @@ async function main() {
     ...US_CREDIT_SPREAD_BACKTEST_FIDELITY,
     startDate,
     endDate,
+    ...(getArg("short-delta") ? { shortPutDelta: Number(getArg("short-delta")) } : {}),
+    ...(getArg("dte") ? { dte: Number(getArg("dte")) } : {}),
+    ...(getArg("profit-target") ? { profitTarget: Number(getArg("profit-target")) } : {}),
     verbose: false,
   };
 
@@ -92,6 +95,7 @@ async function main() {
   console.log("SPY Credit Spread Tail-Risk Test");
   console.log("=".repeat(60));
   console.log(`Period: ${startDate} ~ ${endDate}`);
+  console.log(`Config: δ=${config.shortPutDelta} | DTE=${config.dte} | PT=${(config.profitTarget * 100).toFixed(0)}%`);
 
   console.log("\nLoading data...");
   const gspc = await fetchSP500FromDB(startDate, endDate);
