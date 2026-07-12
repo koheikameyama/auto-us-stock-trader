@@ -80,7 +80,14 @@ function baseHead(
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="${OG_IMAGE_URL}">
 <link rel="icon" type="image/x-icon" href="/favicon.ico">
-<style>${STYLES}</style>`;
+<link rel="apple-touch-icon" href="/icon-192.png">
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#1a234f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="StockBuddy US">
+<style>${STYLES}</style>
+<script>if('serviceWorker'in navigator){addEventListener('load',function(){navigator.serviceWorker.register('/sw.js').catch(function(){})})}</script>`;
 }
 
 const STYLES = `
