@@ -2,7 +2,7 @@
 import dayjs from "dayjs";
 import * as fs from "fs";
 import * as path from "path";
-import { US_CREDIT_SPREAD_DEFAULTS } from "../us/us-credit-spread-config";
+import { US_CREDIT_SPREAD_DEFAULTS, US_CREDIT_SPREAD_BACKTEST_FIDELITY } from "../us/us-credit-spread-config";
 import { runUSCreditSpreadBacktest } from "../us/us-credit-spread-simulation";
 import { fetchSP500FromDB, fetchVixFromDB } from "../us/us-data-fetcher";
 import type { USCreditSpreadBacktestConfig } from "../us/us-credit-spread-types";
@@ -28,6 +28,7 @@ export async function runCreditSpreadStrategy(
 ): Promise<StrategyResult> {
   const config: USCreditSpreadBacktestConfig = {
     ...US_CREDIT_SPREAD_DEFAULTS,
+    ...US_CREDIT_SPREAD_BACKTEST_FIDELITY,
     startDate,
     endDate,
     initialBudget: budget ?? US_CREDIT_SPREAD_DEFAULTS.initialBudget,
@@ -81,6 +82,7 @@ async function main() {
 
   const config: USCreditSpreadBacktestConfig = {
     ...US_CREDIT_SPREAD_DEFAULTS,
+    ...US_CREDIT_SPREAD_BACKTEST_FIDELITY,
     startDate,
     endDate,
     verbose: false,

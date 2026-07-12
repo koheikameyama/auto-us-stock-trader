@@ -1,11 +1,11 @@
-import { bsPutPrice } from "../../core/options-pricing";
+import { bsPutPrice, skewedPutIv } from "../../core/options-pricing";
 import type { SimulatedSpread, USCreditSpreadBacktestConfig } from "../us/us-credit-spread-types";
 
 export interface SpreadEvalContext {
   today: string;
   spotSpy: number;
   vix: number;
-  config: Pick<USCreditSpreadBacktestConfig, "spreadWidth" | "profitTarget" | "stopLossMultiplier" | "riskFreeRate" | "ivScaleFactor">;
+  config: Pick<USCreditSpreadBacktestConfig, "spreadWidth" | "profitTarget" | "stopLossMultiplier" | "riskFreeRate" | "ivScaleFactor" | "ivSkewSlope">;
 }
 
 export type SpreadAction =
@@ -24,9 +24,12 @@ function priceSpreadInternal(
   tte: number,
   riskFreeRate: number,
   iv: number,
+  skewSlope = 0,
 ): number {
-  const shortPx = bsPutPrice(spotSpy, shortStrike, tte, riskFreeRate, iv);
-  const longPx = bsPutPrice(spotSpy, longStrike, tte, riskFreeRate, iv);
+  const shortIv = skewSlope > 0 ? skewedPutIv(iv, spotSpy, shortStrike, skewSlope) : iv;
+  const longIv = skewSlope > 0 ? skewedPutIv(iv, spotSpy, longStrike, skewSlope) : iv;
+  const shortPx = bsPutPrice(spotSpy, shortStrike, tte, riskFreeRate, shortIv);
+  const longPx = bsPutPrice(spotSpy, longStrike, tte, riskFreeRate, longIv);
   return Math.max(shortPx - longPx, 0);
 }
 
@@ -55,6 +58,7 @@ export function evaluateSpread(spread: SimulatedSpread, ctx: SpreadEvalContext):
     tte,
     config.riskFreeRate,
     iv,
+    config.ivSkewSlope ?? 0,
   );
 
   const profitTargetPrice = spread.creditReceived * (1 - config.profitTarget);

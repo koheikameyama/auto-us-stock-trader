@@ -7,7 +7,7 @@
  */
 
 import dayjs from "dayjs";
-import { US_CREDIT_SPREAD_DEFAULTS } from "./us-credit-spread-config";
+import { US_CREDIT_SPREAD_DEFAULTS, US_CREDIT_SPREAD_BACKTEST_FIDELITY } from "./us-credit-spread-config";
 import { runUSCreditSpreadBacktest } from "./us-credit-spread-simulation";
 import { fetchSP500FromDB, fetchVixFromDB } from "./us-data-fetcher";
 import { fetchRegimeFromDB } from "./regime-fetcher";
@@ -46,6 +46,7 @@ async function main() {
 
   const config: USCreditSpreadBacktestConfig = {
     ...US_CREDIT_SPREAD_DEFAULTS,
+    ...US_CREDIT_SPREAD_BACKTEST_FIDELITY,
     startDate,
     endDate,
     initialBudget: budget,

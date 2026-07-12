@@ -15,6 +15,7 @@ import { fetchSP500FromDB, fetchVixFromDB } from "../../src/backtest/us/us-data-
 import { runUSCreditSpreadBacktest } from "../../src/backtest/us/us-credit-spread-simulation";
 import {
   US_CREDIT_SPREAD_DEFAULTS,
+  US_CREDIT_SPREAD_BACKTEST_FIDELITY,
   generateUSCreditSpreadParameterCombinations,
   US_CREDIT_SPREAD_PARAMETER_GRID,
 } from "../../src/backtest/us/us-credit-spread-config";
@@ -171,6 +172,7 @@ async function main() {
     for (const params of paramCombos) {
       const config: USCreditSpreadBacktestConfig = {
         ...US_CREDIT_SPREAD_DEFAULTS,
+        ...US_CREDIT_SPREAD_BACKTEST_FIDELITY,
         ...params,
         startDate: isStart,
         endDate: isEnd,
@@ -206,6 +208,7 @@ async function main() {
 
     const oosConfig: USCreditSpreadBacktestConfig = {
       ...US_CREDIT_SPREAD_DEFAULTS,
+      ...US_CREDIT_SPREAD_BACKTEST_FIDELITY,
       ...bestParams,
       startDate: oosStart,
       endDate: oosEnd,

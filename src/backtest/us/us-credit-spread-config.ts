@@ -40,6 +40,18 @@ export const US_CREDIT_SPREAD_DEFAULTS: Omit<USCreditSpreadBacktestConfig, "star
   verbose: false,
 };
 
+/**
+ * backtest 忠実度パラメータ: 実 fill の skew / slippage を再現する。
+ *
+ * paper-trading の実 fill credit を diff-report で較正した値（skewSlope≈5.5,
+ * slippage≈$0.04 で平均乖離 ≈0%）。**backtest / walk-forward / tail-test の入口だけ**で
+ * spread して使い、live（US_CREDIT_SPREAD_DEFAULTS 直使い）には入れないこと。
+ */
+export const US_CREDIT_SPREAD_BACKTEST_FIDELITY = {
+  ivSkewSlope: 5.5,
+  entrySlippage: 0.04,
+} as const;
+
 /** Walk-Forward パラメータグリッド（27通り） */
 export const US_CREDIT_SPREAD_PARAMETER_GRID = {
   shortPutDelta: [0.15, 0.20, 0.30] as const,

@@ -18,7 +18,7 @@
  * equity curve push・メトリクス計算を担当する。
  */
 
-import { bsPutPrice } from "../../core/options-pricing";
+import { bsPutPrice, skewedPutIv } from "../../core/options-pricing";
 import { calcDDStopState, type DDStopPrevState } from "../credit-spread/dd-stop";
 import { evaluateSpread } from "../credit-spread/spread-evaluator";
 import { generateEntrySignal } from "../credit-spread/signal-generator";
@@ -59,9 +59,12 @@ function priceSpread(
   tte: number,
   riskFreeRate: number,
   iv: number,
+  skewSlope = 0,
 ): number {
-  const shortPx = bsPutPrice(spotSpy, shortStrike, tte, riskFreeRate, iv);
-  const longPx = bsPutPrice(spotSpy, longStrike, tte, riskFreeRate, iv);
+  const shortIv = skewSlope > 0 ? skewedPutIv(iv, spotSpy, shortStrike, skewSlope) : iv;
+  const longIv = skewSlope > 0 ? skewedPutIv(iv, spotSpy, longStrike, skewSlope) : iv;
+  const shortPx = bsPutPrice(spotSpy, shortStrike, tte, riskFreeRate, shortIv);
+  const longPx = bsPutPrice(spotSpy, longStrike, tte, riskFreeRate, longIv);
   return Math.max(shortPx - longPx, 0);
 }
 
@@ -73,11 +76,12 @@ function calcUnrealizedSpreadValue(
   riskFreeRate: number,
   spreadWidth: number,
   today: string,
+  skewSlope = 0,
 ): number {
   let total = 0;
   for (const sp of openSpreads) {
     const tte = Math.max(daysBetween(today, sp.expirationDate) / 365, 0);
-    const currentValue = priceSpread(spotSpy, sp.shortStrike, sp.longStrike, tte, riskFreeRate, iv);
+    const currentValue = priceSpread(spotSpy, sp.shortStrike, sp.longStrike, tte, riskFreeRate, iv, skewSlope);
     total += spreadWidth * CONTRACT_SIZE * sp.contracts - currentValue * CONTRACT_SIZE * sp.contracts;
   }
   return total;
@@ -187,6 +191,7 @@ export async function runUSCreditSpreadBacktest(
       config.riskFreeRate,
       config.spreadWidth,
       today,
+      config.ivSkewSlope ?? 0,
     );
     const newDDState = calcDDStopState({
       today,
@@ -235,7 +240,8 @@ export async function runUSCreditSpreadBacktest(
         const finalContracts = Math.floor(config.contractsPerSpread * multiplier);
 
         if (finalContracts > 0) {
-          // 実 fill は BS 理論クレジットより薄い → creditScale で割り引いて再現
+          // estimatedCredit は既に skew + slippage 込み（signal-generator）。
+          // creditScale は追加の一律倍率（未指定=1.0）。
           const entryCredit = signal.estimatedCredit * (config.creditScale ?? 1);
           const collateralRequired = config.spreadWidth * CONTRACT_SIZE * finalContracts;
           const entryCommission = config.optionsCommission * 2 * finalContracts;
@@ -273,6 +279,7 @@ export async function runUSCreditSpreadBacktest(
       config.riskFreeRate,
       config.spreadWidth,
       today,
+      config.ivSkewSlope ?? 0,
     );
     const totalEquity = cash + unrealizedSpreadValue;
     equityCurve.push({

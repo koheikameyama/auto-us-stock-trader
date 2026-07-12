@@ -37,6 +37,14 @@ export interface USCreditSpreadBacktestConfig {
   ivScaleFactor: number;
   /** 受領クレジット倍率（実 fill が BS 理論より薄い分を再現。未指定=1.0） */
   creditScale?: number;
+  /**
+   * put IV skew の傾き（0/未指定=無効）。正で OTM ほど IV↑ となり、long（深 OTM）の
+   * IV が short より高くなってクレジットが薄くなる。実 fill との乖離（skew 起因）を
+   * backtest に織り込むためのパラメータ。live は未設定=無効で挙動不変。
+   */
+  ivSkewSlope?: number;
+  /** entry 時の固定 slippage（per share, $。実 fill が mid より薄い分。未指定=0） */
+  entrySlippage?: number;
 
   /** 同時保有スプレッド上限 */
   maxPositions: number;

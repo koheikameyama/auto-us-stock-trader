@@ -1,5 +1,5 @@
 import dayjs from "dayjs";
-import { bsPutPrice, findStrikeForTargetDelta } from "../../core/options-pricing";
+import { bsPutPrice, findStrikeForTargetDelta, skewedPutIv } from "../../core/options-pricing";
 import type { USCreditSpreadBacktestConfig } from "../us/us-credit-spread-types";
 
 const CONTRACT_SIZE = 100;
@@ -77,9 +77,21 @@ export function generateEntrySignal(ctx: EntryContext): EntryResult {
   const longStrike = shortStrike - config.spreadWidth;
   if (longStrike <= 0) return { reason: "SKIP_INVALID_STRIKE" };
 
-  const shortPremium = shortInfo.premium;
-  const longPremium = bsPutPrice(spotSpy, longStrike, tte, config.riskFreeRate, iv);
-  const credit = shortPremium - longPremium;
+  // strike 選択は flat IV（live と同じ delta ベース）。クレジット評価だけ skew を適用する。
+  const slope = config.ivSkewSlope ?? 0;
+  const shortPremium =
+    slope > 0
+      ? bsPutPrice(spotSpy, shortStrike, tte, config.riskFreeRate, skewedPutIv(iv, spotSpy, shortStrike, slope))
+      : shortInfo.premium;
+  const longPremium = bsPutPrice(
+    spotSpy,
+    longStrike,
+    tte,
+    config.riskFreeRate,
+    slope > 0 ? skewedPutIv(iv, spotSpy, longStrike, slope) : iv,
+  );
+  // 実 fill の薄さ: skew（moneyness 依存）+ 固定 slippage（mid 割れ）
+  const credit = shortPremium - longPremium - (config.entrySlippage ?? 0);
   if (credit <= 0.05) return { reason: "SKIP_LOW_CREDIT" };
 
   const collateralRequired = config.spreadWidth * CONTRACT_SIZE * config.contractsPerSpread;

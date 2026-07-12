@@ -46,6 +46,24 @@ export function bsPutPrice(S: number, K: number, T: number, r: number, sigma: nu
   return K * Math.exp(-r * T) * cdf(-d2) - S * cdf(-d1);
 }
 
+/**
+ * Put IV に skew を適用する（equity put skew の線形近似）。
+ *
+ * OTM が深い put ほど IV が高い、という現実の skew を再現する。
+ * credit spread では long（深 OTM）の IV が short より高くなり、フラット IV より
+ * クレジットが薄くなる。backtest の忠実度向上用（live は skewSlope 未指定で無効）。
+ *
+ * @param baseIv ATM 基準 IV（例 VIX/100）
+ * @param spot 現在株価
+ * @param strike 対象 strike
+ * @param skewSlope skew の傾き（0/負=無効、正で OTM ほど IV↑）
+ */
+export function skewedPutIv(baseIv: number, spot: number, strike: number, skewSlope: number): number {
+  if (!skewSlope || skewSlope <= 0 || spot <= 0) return baseIv;
+  const otm = Math.max((spot - strike) / spot, 0); // put の OTM 度合い（0〜）
+  return baseIv * (1 + skewSlope * otm);
+}
+
 /** コールデルタ: 0〜1 */
 export function bsCallDelta(S: number, K: number, T: number, r: number, sigma: number): number {
   if (T <= 0 || sigma <= 0) return S >= K ? 1 : 0;
