@@ -43,6 +43,28 @@ function graphemeCount(text: string): number {
   return [...text].length;
 }
 
+/**
+ * SNS 投稿の成否を専用 Slack チャンネルへ通知する。
+ * SNS_POST_SLACK_WEBHOOK_URL 優先、無ければ汎用 SLACK_WEBHOOK_URL。未設定なら no-op。
+ */
+async function notifySnsSlack(text: string, ok: boolean): Promise<void> {
+  const url = process.env.SNS_POST_SLACK_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL;
+  if (!url) return;
+  const preview = text.split("\n")[0].replace(/\*/g, "");
+  try {
+    await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: (ok ? "✅ " : "⚠️ ") + preview,
+        attachments: [{ color: ok ? "good" : "warning", text, mrkdwn_in: ["text"] }],
+      }),
+    });
+  } catch {
+    // best-effort: 通知失敗で投稿処理を止めない
+  }
+}
+
 function regimeLineOf(r: BullMarketResult): string {
   const breadthPct = (r.current.breadth * 100).toFixed(1);
   const vix = Number.isFinite(r.current.vix) ? r.current.vix.toFixed(1) : "N/A";
@@ -128,16 +150,16 @@ export async function runDailySocialPost(regime: BullMarketResult): Promise<void
 
   const xUrl = buildXIntentUrl(text);
   const anyFailed = bsky === "failed" || threads === "failed";
-  await sendSlack({
-    level: anyFailed ? "warn" : "info",
-    text: [
+  await notifySnsSlack(
+    [
       "🦋 Bluesky / 🧵 Threads 日次投稿",
       `Bluesky: ${label[bsky]}`,
       `Threads: ${label[threads]}`,
       "",
       `📱 X 手動投稿: <${xUrl}|タップして下書きを開く>`,
     ].join("\n"),
-  });
+    !anyFailed,
+  );
 }
 
 /** 前営業日と当日で局面レベルが変わっていれば Slack に通知する（状態を持たない比較）。 */
