@@ -10,6 +10,7 @@
 | **バックテスト層** | ✅ 本リポに移管済 | 8 戦略移管完了。tail-test / walk-forward / portfolio 分析フレームワーク実装済。SPY Credit Spread（put-only）は skew+slippage 込みで edge 消滅（4/7 FAIL）→ **Iron Condor へ pivot（skew 込みで 7/7 PASS・WF 堅牢）**（後述）|
 | **Paper Trading 層** | ✅ 自律運用中 | Phase A〜E 完了。**Alpaca REST API** で entry/close/expire 発注・kill switch・Slack 通知・週次レポートまで自動化。現在 Phase F（90 日観察）|
 | **本番取引層** | 📋 未着手 | Paper trading 90 日観察 PASS 後に Alpaca live で段階的にサイズアップ |
+| **相場局面モニター（公開 web）** | 🚧 実装済・デプロイ待ち | 米国株の相場局面 LP（Hono SSR + Railway、局面判定 / 運用実績 / waitlist / JSON API）。stock-buddy.net の米国版（後述）|
 
 ## アーキテクチャ
 
@@ -277,6 +278,32 @@ npm run paper-trading:weekly-report
 詳細:
 - [docs/paper-trading-operations.md](docs/paper-trading-operations.md)（運用ガイド）
 - [docs/plans/2026-04-30-paper-trading-design.md](docs/plans/2026-04-30-paper-trading-design.md)（全体設計）
+
+## 相場局面モニター（公開 web ページ）
+
+米国株（S&P 500）の相場局面を「いま、攻めるか休むか」で毎日ひと目に見せる公開 LP。
+JP リポ `auto-stock-trader`（stock-buddy.net）の Hono SSR 構成を米国版として移植したもの（KOH-545）。
+
+- **エントリ**: [src/worker.ts](src/worker.ts)（`npm start` = `tsx src/worker.ts`、Hono を `@hono/node-server` で常駐）
+- **局面判定**: [src/core/regime-shift-detector.ts](src/core/regime-shift-detector.ts) の 5 シグナル
+  （breadth 5日連続 ≥54% / breadth +10pp・30日 / ^GSPC>SMA50 / SMA50 上向き / VIX<25）→ 大強気🔥〜中立⚪の 4 段。
+  breadth は [src/core/breadth-history.ts](src/core/breadth-history.ts) が `StockDailyBar` から SMA25 超え比率を SQL 算出。
+- **運用実績**: [src/core/public-performance.ts](src/core/public-performance.ts) が `Position`(CLOSED) から %のみ開示
+  （銘柄・金額は非公開、各決済に仕込み日の局面を復元して添付）。決済ゼロ時はセクションごと非表示。
+- **ページ/API**: [src/web/](src/web/)（`views/public-regime.ts` の SSR、`routes/public.ts`＝ページ+waitlist、
+  `routes/regime.ts`＝公開 JSON `/api/regime`、5分メモリキャッシュ）。
+- **メール先行登録**: `WaitlistEntry`（Prisma）+ Resend（[src/lib/mail.ts](src/lib/mail.ts)、env 未設定なら no-op）。
+- **デプロイ**: Railway（[Dockerfile](Dockerfile) / [railway.toml](railway.toml) / [start.sh](start.sh) = `migrate deploy` → 起動）。
+  公開ドメインは env `PUBLIC_SITE_URL` / `PUBLIC_HOSTS`、管理 API `/admin/*` は Basic 認証（`BASIC_AUTH_USER/PASS`）。
+
+```bash
+# ローカル起動（共有 DB を読んで公開ページ配信）
+npm start                       # → http://localhost:3000/
+curl localhost:3000/api/regime  # 局面 JSON（無料サブセット）
+```
+
+> 注意: 本リポの `DATABASE_URL` は共有 Railway DB を指すため `prisma migrate dev` は履歴乖離で reset を要求する。
+> スキーマ変更は migration SQL を手書きし、`prisma migrate deploy`（[start.sh](start.sh) / CI）で適用すること。
 
 ## 関連リポジトリ
 
