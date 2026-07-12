@@ -197,3 +197,14 @@ model ErrorLog {
   @@index([category])
   @@schema("auto_us_stock_trader")
 }
+
+/// 相場局面モニター公開ページのメール先行登録（waitlist）
+model WaitlistEntry {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  source    String?  // "regime-public" 等の流入元
+  createdAt DateTime @default(now())
+
+  @@index([createdAt(sort: Desc)])
+  @@schema("auto_us_stock_trader")
+}
