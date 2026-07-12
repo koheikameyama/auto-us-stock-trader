@@ -34,6 +34,8 @@ function readAsset(name: string): ArrayBuffer {
 const FAVICON_ICO = readAsset("favicon.ico");
 const ICON_192 = readAsset("icon-192.png");
 const ICON_512 = readAsset("icon-512.png");
+const OG_IMAGE = readAsset("og-image.png");
+const OG_BANNER = readAsset("og-banner.png");
 
 function serveAsset(contentType: string, body: ArrayBuffer) {
   return (c: Context) => {
@@ -46,6 +48,8 @@ function serveAsset(contentType: string, body: ArrayBuffer) {
 app.get("/favicon.ico", serveAsset("image/x-icon", FAVICON_ICO));
 app.get("/icon-192.png", serveAsset("image/png", ICON_192));
 app.get("/icon-512.png", serveAsset("image/png", ICON_512));
+app.get("/og-image.png", serveAsset("image/png", OG_IMAGE));
+app.get("/og-banner.png", serveAsset("image/png", OG_BANNER));
 
 // PWA マニフェスト
 app.get("/manifest.json", (c) =>

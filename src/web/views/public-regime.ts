@@ -13,7 +13,7 @@
 import { PUBLIC_SITE_URL } from "../../lib/constants/web";
 import type { SignalLevel } from "../../core/regime-shift-detector";
 
-const OG_IMAGE_URL = `${PUBLIC_SITE_URL}icon-512.png`;
+const OG_IMAGE_URL = `${PUBLIC_SITE_URL}og-image.png`;
 
 export interface PublicRegimeData {
   level: SignalLevel;
@@ -75,7 +75,9 @@ function baseHead(
 <meta property="og:site_name" content="US 相場局面モニター">
 <meta property="og:url" content="${PUBLIC_SITE_URL}">
 <meta property="og:image" content="${OG_IMAGE_URL}">
-<meta name="twitter:card" content="summary">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="${OG_IMAGE_URL}">
 <link rel="icon" type="image/x-icon" href="/favicon.ico">
 <style>${STYLES}</style>`;
