@@ -50,6 +50,13 @@ const JOBS: JobSpec[] = [
     workflowFile: "us-daily.yml",
     schedule: { hours: [18], minutes: [0], wdays: [1, 2, 3, 4, 5] }, // NY 18:00 平日（market close 後 2h、yfinance 反映に余裕）
   },
+  {
+    title: "auto-us-stock-trader us-social-post daily",
+    workflowFile: "us-social-post.yml",
+    // NY 18:30 平日。us-daily backfill（18:00 開始・3〜7 分）の完了後に置く。
+    // 局面は DB にある最新足で判定するため、backfill 前に投稿すると前日分を出してしまう。
+    schedule: { hours: [18], minutes: [30], wdays: [1, 2, 3, 4, 5] },
+  },
 ];
 
 function requireEnv(name: string): string {

@@ -1,11 +1,11 @@
 name: US Social Post
 
-# US 市場引け後（16:00 ET ≒ 翌 6:00 JST 前後）に日次 SNS 投稿 + 局面変化アラート。
-# GitHub Actions の cron は UTC 固定で DST 揺れ + 遅延するため、起動は cron-job.org から
-# workflow_dispatch を叩く構成（他の US ワークフローと同方針）。
+# 日次 SNS 投稿 + 局面変化アラート。cron-job.org から NY 18:30 平日に workflow_dispatch。
+# 局面は DB にある最新足で判定するため、us-daily backfill（NY 18:00 開始・3〜7 分）の
+# 完了後に置く。これより前に投稿すると当日足が入っておらず前日の局面を出してしまう。
+# GitHub Actions の cron は UTC 固定で DST 揺れ + 遅延するため使わない（他の US ワークフローと同方針）。
+# スケジュール定義は scripts/setup-cron-job.ts の JOBS が正（America/New_York 指定で DST 自動追従）。
 on:
-  # schedule:
-  #   - cron: "10 21 * * 1-5"  # 参考: UTC 21:10 = ET 16:10(EST) / 17:10(EDT)
   workflow_dispatch: {}
 
 jobs:
