@@ -196,11 +196,37 @@ npm run tail-test:credit-spread -- --start 2007-01-03 --end 2026-04-28 --label s
 - [docs/plans/2026-04-30-credit-spread-tail-improvement-design.md](docs/plans/2026-04-30-credit-spread-tail-improvement-design.md)（戦略改善履歴）
 - [docs/spy-credit-spread-roadmap.md](docs/spy-credit-spread-roadmap.md)（本番投入ロードマップ。edge 再検証が前提条件に）
 
-### SPY Iron Condor（✅ pivot 先。skew 込みで edge 実在）
+### SPY Iron Condor（⚠️ 本番化を保留。call skew 感度で不合格）
 
-**結論: put-only の edge は skew で消滅したが、Iron Condor（put credit spread + bear call credit spread）は
-同じ片側 collateral で put+call の 2倍プレミアムを取れる構造により、skew を実 fill どおり織り込んでも edge が残る。**
-7/7 PASS（2007-2026 tail-test）。edge の源泉は「call 側単体の収益」ではなく 2倍プレミアムの構造にある。
+**結論: baseline（`callSkewSlope: 4.05`）では 7/7 PASS だが、この合格は未較正の call skew に強く依存する。
+call slope をわずか +11%（4.05 → 4.5）動かすだけで 5/7 FAIL に崩れるため、本番戦略としては採用しない。**
+
+put-only の edge は skew 込みで消滅した。IC は「同じ片側 collateral で put+call の 2倍プレミアムを取る」
+構造により edge が残ると判断されたが、その収益の約半分を担う call 側 skew が低 VIX の単一スナップショット
+較正のままだった。感度分析の結果、put-only を殺したのと同じ故障モード（未較正 IV モデルによる
+クレジット過大評価）が call 側に残っている可能性が高い。
+
+→ 詳細: [docs/reports/iron-condor-call-skew-sensitivity-2026-07-18.md](docs/reports/iron-condor-call-skew-sensitivity-2026-07-18.md)
+
+| call slope | 対 baseline | PF | CAGR | MaxDD | 判定 |
+|---|---|---|---|---|---|
+| **4.05**（現状較正） | — | 1.83 | 7.03% | 21.2% | ✅ 7/7 |
+| 4.5 | +11% | 1.65 | 6.31% | 26.6% | ❌ 5/7 |
+| 5.2 | +28% | 1.38 | 3.51% | 51.4% | ❌ 5/7 |
+| 6.3（put 同等） | +56% | 1.09 | 0.25% | 47.0% | ❌ 4/7 |
+
+主な問題:
+- **安全余裕が無い** — baseline CAGR 7.03% に対し閾値 6.5%（IC 用に 10% から引き下げ済み）。余裕 +0.53pp。
+  put 側は実 fill 乖離が 21.2% 実測されており、11% の較正誤差は現実的な範囲
+- **MaxDD の悪化がテール期間外で発生** — slope 5.2 で MaxDD 51.4% に対しテール期間 DD は 16.4%。
+  危機局面ではなく平常時に最大 DD が出ており、戦略の想定と整合しない
+- **トレード数が非単調**（441 → 454 → 292）— slope がデルタ経由で行使価格選択自体を動かしている疑い
+
+復活の条件: `calibrate-skew.ts` を複数 VIX 環境で実走し真の call slope が 4.05 近傍と実測できること。
+ただし「崖のふち」である事実は変わらないため、安全余裕を確保するパラメータ再探索とセットで行う（KOH-544）。
+
+<details>
+<summary>baseline（callSkewSlope 4.05）の tail-test 詳細</summary>
 
 | 指標 | put-only（skew込, 4/7 FAIL）| **Iron Condor（skew込）** | 閾値 | 判定 |
 |---|---|---|---|---|
@@ -236,6 +262,9 @@ npm run walk-forward:iron-condor
 
 ⚠️ **caveat**: call skew は低 VIX（~11-13%）の単一スナップショット較正。skew は regime 依存のため、
 複数 VIX 環境で `calibrate-skew.ts` を再走して確認すること（`--put-slope` / `--call-slope` で上書き可能）。
+**この caveat が本セクション冒頭の本番化保留の直接原因となった**（2026-07-18 感度分析）。
+
+</details>
 
 ### 他戦略の tail-test
 
