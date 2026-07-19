@@ -8,7 +8,7 @@
 import { Hono, type Context } from "hono";
 import { prisma } from "../../lib/prisma";
 import { sendWaitlistWelcomeEmail } from "../../lib/mail";
-import { getRegimeCached } from "../regime-cache";
+import { getRegimeCached, getDivergenceCached } from "../regime-cache";
 import { getPerformanceCached } from "../performance-cache";
 import type {
   PerformanceSnapshot,
@@ -19,6 +19,7 @@ import {
   getLevelLabel,
   getLevelSummary,
   SIGNAL_LABELS,
+  REGIME_SHIFT_PARAMS,
 } from "../../core/regime-shift-detector";
 import {
   publicRegimePage,
@@ -78,7 +79,10 @@ function toPublicPerformance(
 export async function renderPublicRegimePage(c: Context): Promise<Response> {
   let data: PublicRegimeData | null = null;
   try {
-    const r = await getRegimeCached();
+    const [r, div] = await Promise.all([
+      getRegimeCached(),
+      getDivergenceCached(),
+    ]);
     data = {
       level: r.level,
       levelLabel: getLevelLabel(r.level),
@@ -86,9 +90,11 @@ export async function renderPublicRegimePage(c: Context): Promise<Response> {
       summary: getLevelSummary(r.level),
       asOfDate: r.asOfDate.toISOString().slice(0, 10),
       breadth: r.current.breadth,
+      breadthThreshold: REGIME_SHIFT_PARAMS.BREADTH_THRESHOLD,
       vix: Number.isFinite(r.current.vix) ? r.current.vix : null,
       signalCount: r.signalCount,
       signalTotal: Object.keys(SIGNAL_LABELS).length,
+      breadthDivergence: div.state === "DIVERGING",
     };
   } catch (e) {
     console.error("[public/live] regime unavailable:", e);

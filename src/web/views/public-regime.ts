@@ -23,10 +23,14 @@ export interface PublicRegimeData {
   asOfDate: string;
   /** SMA25 上回り比率（0-1） */
   breadth: number;
+  /** breadth の強気閾値（54%）。敘7脈として無料開示 */
+  breadthThreshold: number;
   /** VIX 終値。取得不可時は null（N/A 表示） */
   vix: number | null;
   signalCount: number;
   signalTotal: number;
+  /** S&P 500 高値圈にあるのに breadth が追随していない状態か（フラグのみ、中身は有料） */
+  breadthDivergence: boolean;
 }
 
 /** 実績セクションの決済1行分（表示用に整形済みの文字列を受け取る） */
@@ -148,6 +152,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
 .result h1{margin:14px 0 6px}
 .result p{color:var(--text-muted);margin:0 0 22px}
 .back{display:inline-block;background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:700;padding:11px 20px;border-radius:10px;font-size:14px}
+.threshold{color:var(--text-faint);font-size:11.5px}
+.diverg-badge{margin-top:8px;display:inline-flex;align-items:baseline;flex-wrap:wrap;gap:6px;font-size:12.5px;font-family:var(--mono);color:#b45309;background:color-mix(in srgb,#b45309 10%,var(--surface));border:1px solid color-mix(in srgb,#b45309 25%,transparent);border-radius:8px;padding:5px 10px}
+@media(prefers-color-scheme:dark){.diverg-badge{color:#fbbf24;background:color-mix(in srgb,#b45309 15%,var(--surface));border-color:color-mix(in srgb,#b45309 30%,transparent)}}
+.diverg-lock{color:var(--text-faint);font-size:11px}
 `;
 
 /** 局面が取得できない時のフォールバック表示 */
@@ -202,13 +210,18 @@ export function publicRegimePage(
   const description =
     "米国株（S&P 500）の相場局面（強気か・休むべきか）を毎日ひと目で。breadth・VIX・S&P 500 の客観データから局面を判定します。";
 
+  const divergenceTeaser = data?.breadthDivergence
+    ? `<div class="diverg-badge">⚠️ S&amp;P 500 は高値圈だが breadth は未追隨<span class="diverg-lock">—継続日数・乖離幅は🔒（有料）</span></div>`
+    : "";
+
   const verdict = data
     ? `<div class="verdict" style="--lamp-c:${LEVEL_COLOR[data.level]}">
         <div class="lamp"></div>
         <div>
           <div class="lv-name">${data.emoji} ${data.levelLabel}</div>
           <div class="one-line">${data.summary}</div>
-          <div class="metrics">breadth ${(data.breadth * 100).toFixed(1)}% ／ VIX ${data.vix !== null && Number.isFinite(data.vix) ? data.vix.toFixed(1) : "N/A"} ／ 強気シグナル ${data.signalCount}/${data.signalTotal}</div>
+          <div class="metrics">breadth ${(data.breadth * 100).toFixed(1)}% <span class="threshold">（強气閾値 ${(data.breadthThreshold * 100).toFixed(0)}%）</span> ／ VIX ${data.vix !== null && Number.isFinite(data.vix) ? data.vix.toFixed(1) : "N/A"} ／ 強気シグナル ${data.signalCount}/${data.signalTotal}</div>
+          ${divergenceTeaser}
           <div class="asof">${data.asOfDate} 引け時点</div>
         </div>
       </div>`
@@ -231,6 +244,7 @@ export function publicRegimePage(
       <div class="locked">
         <div class="locked-row"><span>5シグナルの内訳（どれが点灯しているか）</span><span class="lk">🔒</span></div>
         <div class="locked-row"><span>大強気相場まであと何が必要か</span><span class="lk">🔒</span></div>
+        <div class="locked-row"><span>breadth ダイバージェンスの継続日数・乖離幅</span><span class="lk">🔒</span></div>
         <div class="locked-row"><span>局面が変わったら即通知（アラート）</span><span class="lk">🔒</span></div>
       </div>
       <div class="gate">
