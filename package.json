@@ -41,6 +41,7 @@
     "walk-forward:monthly": "tsx scripts/walk-forward/run-monthly-evaluation.ts",
     "paper-trading:weekly-report": "tsx src/paper-trading/weekly-report.ts",
     "paper-trading:diff-report": "tsx src/paper-trading/diff-report.ts",
+    "paper-trading:record-skew": "tsx src/paper-trading/record-skew.ts",
     "social:post": "tsx src/jobs/us-social-post.ts"
   },
   "devDependencies": {

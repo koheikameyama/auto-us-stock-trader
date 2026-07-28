@@ -185,6 +185,36 @@ model RegimeSignal {
   @@schema("auto_us_stock_trader")
 }
 
+/// IV skew の日次スナップショット（Alpaca 市場クォートの実測）。
+/// call slope は VIX regime 依存（KOH-544）で、スパイク時の値は事後に再現できないため、
+/// 毎営業日 NY 取引時間中に記録して複数 regime のサンプルを貯める。
+model IvSkewSnapshot {
+  id            String    @id @default(cuid())
+  date          DateTime  @db.Date // 取得日（NY 営業日）
+  dte           Int // 目標 DTE
+  expiry        DateTime  @db.Date
+  capturedAt    DateTime  @default(now())
+  spot          Float
+  baseIv        Float // ATM IV。live で取れる regime 指標
+  vix           Float? // DB の最新 close。NY 10:00 実行時は前営業日の値になり得る
+  vixDate       DateTime? @db.Date // vix の日付（lag の可視化用）
+  putSlopeAll   Float? // サンプル 0 件なら null
+  putSlopeBand  Float?
+  putCountAll   Int
+  putCountBand  Int
+  callSlopeAll  Float?
+  callSlopeBand Float?
+  callCountAll  Int
+  callCountBand Int
+  points        Json // 生 smile: [{ strike, x, iv, delta }]。別の band 定義で再フィットするため
+  createdAt     DateTime  @default(now())
+
+  @@unique([date, dte])
+  @@index([date])
+  @@index([baseIv])
+  @@schema("auto_us_stock_trader")
+}
+
 model ErrorLog {
   id              String   @id @default(cuid())
   occurredAt      DateTime @default(now())

@@ -32,6 +32,26 @@ jobs:
       - name: Run paper-trading daily cycle
         run: npx tsx src/paper-trading/daily-runner.ts
 
+      # IV skew は VIX regime 依存で、スパイク時の値は事後に再現できない（KOH-544）。
+      # 取引サイクルの成否と独立に記録する（kill switch で停止中でもサンプルは貯める）。
+      - name: Record IV skew snapshot
+        id: record-skew
+        if: always()
+        continue-on-error: true
+        run: npx tsx src/paper-trading/record-skew.ts
+
+      - name: Notify Slack on skew record failure
+        if: always() && steps.record-skew.outcome == 'failure'
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_TITLE: "⚠️ IV skew スナップショット記録に失敗"
+          SLACK_MESSAGE: |
+            record-skew.ts が失敗しました（取引サイクルには影響しません）。
+            当日分の skew サンプルが欠測します。VIX スパイク中なら市場時間内に手動実行を検討してください。
+          SLACK_COLOR: warning
+          SLACK_FOOTER: "auto-us-stock-trader"
+
       - name: Notify Slack on failure
         if: failure()
         uses: rtCamp/action-slack-notify@v2

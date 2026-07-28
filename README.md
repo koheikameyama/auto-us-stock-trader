@@ -106,7 +106,7 @@ python scripts/data/backfill_vol_etfs.py
 |---|---|---|
 | `us-daily.yml` | 平日 JST 7:00 頃（cron-job.org から `workflow_dispatch`）| OHLCV / 指数 / ETF backfill + regime 計算 |
 | `us-weekly.yml` | 毎週土曜 JST 8:00（cron）| 決算日 |
-| `paper-trading-daily.yml` | 平日（cron-job.org から `workflow_dispatch`）| Alpaca daily cycle（entry/close/expire 発注）|
+| `paper-trading-daily.yml` | 平日 NY 10:00（cron-job.org から `workflow_dispatch`）| Alpaca daily cycle（entry/close/expire 発注）+ IV skew 記録 |
 | `monthly-walk-forward.yml` | 毎月 1 日 JST 9:00（cron）| 全戦略の walk-forward 月次評価 |
 | `db-migrate-deploy.yml` | `main` に `prisma/migrations/**` push 時 | 本番 DB へ `prisma migrate deploy` |
 | `macro-events-seed.yml` | 手動 | `data/macro_events.csv` を MacroEvent へ UPSERT |
@@ -265,6 +265,17 @@ npm run walk-forward:iron-condor
 ⚠️ **caveat**: call skew は低 VIX（~11-13%）の単一スナップショット較正。skew は regime 依存のため、
 複数 VIX 環境で `calibrate-skew.ts` を再走して確認すること（`--put-slope` / `--call-slope` で上書き可能）。
 **この caveat が本セクション冒頭の本番化保留の直接原因となった**（2026-07-18 感度分析）。
+
+サンプルは事後に再現できないため、**毎営業日 NY 10:00 に `record-skew.ts` で `IvSkewSnapshot` へ記録**
+（`paper-trading-daily.yml` のステップ、取引サイクルとは独立）。VIX スパイク当日は手動追加取得も可:
+```bash
+npm run paper-trading:record-skew        # DB に記録（同日同 DTE は上書き）
+npx tsx src/paper-trading/calibrate-skew.ts   # 標準出力のみ
+```
+
+2 点目の実測（2026-07-28、baseIv 15.7%、35DTE）: **put band 5.57 / call band 5.38**。
+較正値 4.05 から +33% 高く、感度分析の 5.2（5/7 FAIL・CAGR 3.51%・MaxDD 51.4%）を上回る。
+**単日のスナップショットだが、本番化保留の判断を支持する方向**。継続記録で regime 依存の形を確認する。
 
 </details>
 

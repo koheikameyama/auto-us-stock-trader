@@ -9,13 +9,14 @@ Phase F（90 日 paper trading 観察）の運用手順と設定。
 
 ```
 平日 (月-金):
-  JST 7:00 頃   cron-job.org が paper-trading-daily.yml を workflow_dispatch
-                  └─ GitHub Actions (ubuntu-latest) 上で daily-runner.ts 実行
-                       ├─ kill switch / 重複発注チェック
+  NY 10:00      cron-job.org が paper-trading-daily.yml を workflow_dispatch
+  (JST 23:00 /    └─ GitHub Actions (ubuntu-latest) 上で daily-runner.ts 実行
+   冬時間 翌0:00)      ├─ kill switch / 重複発注チェック
                        ├─ position-syncer（Alpaca 実ポジと DB 照合）
                        ├─ close/expire 判定 → 発注
                        └─ entry 判定 → 発注
-  JST 7:00 - 7:30   Slack 通知到着、ユーザーが目視確認
+                  └─ record-skew.ts（IV skew スナップショットを DB に記録）
+  起動 +5〜10 分   Slack 通知到着、ユーザーが目視確認
 
 土曜:
   週次 Markdown レポート（`npm run paper-trading:weekly-report` を手動 or 別途起動）
@@ -24,9 +25,13 @@ Phase F（90 日 paper trading 観察）の運用手順と設定。
   休み（NY 市場休場）
 ```
 
-> データ backfill（`us-daily.yml`）と paper trading（`paper-trading-daily.yml`）は別ワークフロー。
-> どちらも GitHub Actions の cron が UTC 固定で DST に揺れる & 遅延するため、
-> 外部の [cron-job.org](https://cron-job.org) から `workflow_dispatch` を叩いて起動する。
+> データ backfill（`us-daily.yml`、NY 18:00）と paper trading（`paper-trading-daily.yml`、NY 10:00）は
+> 別ワークフロー。どちらも GitHub Actions の cron が UTC 固定で DST に揺れる & 遅延するため、
+> 外部の [cron-job.org](https://cron-job.org) から `workflow_dispatch` を叩いて起動する
+> （タイムゾーン `America/New_York` 指定で DST 自動追従。登録は [scripts/setup-cron-job.ts](../scripts/setup-cron-job.ts)）。
+>
+> 起動が寄り（09:30）でなく 10:00 なのは、opening rotation 中は spread が広く quote が荒れて
+> limit が touch されにくいため。
 
 ---
 
@@ -64,6 +69,9 @@ npx tsx src/paper-trading/daily-runner.ts --dry-run
 
 # 週次レポート（docs/paper-trading/weekly-YYYY-Www.md を生成）
 npm run paper-trading:weekly-report
+
+# IV skew スナップショットを DB に記録（同日同 DTE は上書き）
+npm run paper-trading:record-skew
 ```
 
 ローカル実行には `.env` に `ALPACA_API_KEY` / `ALPACA_API_SECRET` / `ALPACA_API_ENDPOINT`
@@ -71,18 +79,38 @@ npm run paper-trading:weekly-report
 
 ---
 
+## IV skew の日次記録（record-skew.ts）
+
+`callSkewSlope` は VIX regime 依存だが、較正値 4.05 は低 VIX（~11-13%）の単一スナップショットのみ
+（KOH-544）。**スパイク時の skew は事後に再現できない**ため、毎営業日スナップを貯める。
+
+- `paper-trading-daily.yml` の最終ステップで実行。`if: always()` + `continue-on-error: true` のため、
+  **取引サイクルが失敗しても / kill switch で停止中でも記録は走り、逆に記録が失敗しても取引には影響しない**
+- 保存先: `IvSkewSnapshot`（`@@unique([date, dte])`。同日同 DTE の再実行は上書き）
+- 失敗時は Slack に warning 通知（当日分が欠測する）
+- **市場時間中に走ることが前提**。Alpaca の snapshot は時間外だと `impliedVol` が付かず、
+  その場合は記録せずスキップ扱いで正常終了する（cron-job.org 登録は NY 10:00 平日）
+- `vix` 列は DB の最新 close なので NY 10:00 時点では前営業日の値。live の regime 指標には
+  同時取得の `baseIv`（ATM IV）を使うこと。`vixDate` 列で lag を確認できる
+- `points` 列に生 smile（strike / x / iv / delta）を保持しているため、
+  後から別の delta band 定義で再フィットできる
+
+VIX スパイク当日に追加サンプルが欲しい場合は、市場時間中に手動実行してよい（`npm run paper-trading:record-skew`）。
+
 ## NY 市場との関係
 
-- NY 9:30-16:00 ET = JST 23:30-翌5:00 (EDT) / JST 翌0:30-6:00 (EST)
-- 市場クローズ後の close データは 30〜60 分で Alpaca に反映
-- JST 7:00 起動時点で当日 close を使えるが、戦略は既存 spread のクローズ判定 + エントリー判断ベースなので影響軽微
+- NY 9:30-16:00 ET = JST 22:30-翌5:00 (EDT) / JST 23:30-翌6:00 (EST)
+- 日次サイクルは NY 10:00 起動 = **取引時間内**。SPY は live quote を使い、当日約定を狙う
+  （limit が touch されなければ TIMEOUT で翌営業日に持ち越し）
+- VIX は DB の最新 close を使う。backfill（`us-daily.yml`）が NY 18:00 のため、
+  起動時点で DB にあるのは**前営業日の close**
 
 ### NY 取引時間外の挙動
 
-`daily-runner.ts` は時間外でも動く設計:
+手動実行など時間外に走らせた場合:
 - live SPY/VIX が null なら early exit
 - 発注は NY 取引時間のみ受理される（時間外は reject / timeout になり得る）
-- JST 7:00 起動は close 後だが当日 fill は不可、翌取引日の約定を待つ仕様
+- option snapshot に `impliedVol` が付かないため、`record-skew.ts` は記録せずスキップする
 
 ---
 
@@ -90,11 +118,11 @@ npm run paper-trading:weekly-report
 
 | 頻度 | 内容 | タイミング |
 |---|---|---|
-| **毎朝** | 日次サマリー + entry/skip 通知 | JST 7:30 頃（ワークフロー完了後）|
+| **毎営業日** | 日次サマリー + entry/skip 通知 | JST 23:10 頃 / 冬時間 翌0:10 頃（ワークフロー完了後）|
 | **異常時** | 致命的エラー（緊急色 mention 付き）+ ワークフロー失敗通知 | 即時 |
 | **毎週土曜** | 週次 Markdown レポート | 手動生成後に確認 |
 
-→ **朝食前後に Slack 1 通確認すれば運用回せる**設計。
+→ **1 日 1 通の Slack を確認すれば運用回せる**設計（NY 寄り後なので JST では就寝前）。
 
 ---
 
